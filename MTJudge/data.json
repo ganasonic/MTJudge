@@ -1,0 +1,957 @@
+{
+  "settings": {
+    "developer": 1
+  },
+  "indexes": {
+    "airpos_flip": 0,
+    "airpos_3d": 14,
+    "airpos_up": 28
+  },
+  "data": [
+    {
+      "airname": "bT",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "bL",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "bp",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "bP",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "bG",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "bF",
+      "dd_point_m": 0.88,
+      "dd_point_f": 0.98
+    },
+    {
+      "airname": "bdF",
+      "dd_point_m": 1.05,
+      "dd_point_f": 1.15
+    },
+    {
+      "airname": "btF",
+      "dd_point_m": 1.22,
+      "dd_point_f": 1.32
+    },
+    {
+      "airname": "fT",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "fP",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "fp",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "fG",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "fF",
+      "dd_point_m": 0.88,
+      "dd_point_f": 0.98
+    },
+    {
+      "airname": "-",
+      "dd_point_m": 0.0,
+      "dd_point_f": 0.0
+    },
+    {
+      "airname": "3op",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "3oG",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "7oG",
+      "dd_point_m": 1.01,
+      "dd_point_f": 1.11
+    },
+    {
+      "airname": "7op",
+      "dd_point_m": 0.88,
+      "dd_point_f": 0.98
+    },
+    {
+      "airname": "10oG",
+      "dd_point_m": 1.2,
+      "dd_point_f": 1.3
+    },
+    {
+      "airname": "10op",
+      "dd_point_m": 1.05,
+      "dd_point_f": 1.15
+    },
+    {
+      "airname": "14op",
+      "dd_point_m": 1.22,
+      "dd_point_f": 1.32
+    },
+    {
+      "airname": "14oG",
+      "dd_point_m": 1.39,
+      "dd_point_f": 1.49
+    },
+    {
+      "airname": "l",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "lp",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "lG",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "lF",
+      "dd_point_m": 0.85,
+      "dd_point_f": 0.95
+    },
+    {
+      "airname": "lpF",
+      "dd_point_m": 0.88,
+      "dd_point_f": 0.98
+    },
+    {
+      "airname": "lGF",
+      "dd_point_m": 1.01,
+      "dd_point_f": 1.11
+    },
+    {
+      "airname": "3",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "3G",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "3p",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "7",
+      "dd_point_m": 0.85,
+      "dd_point_f": 0.95
+    },
+    {
+      "airname": "7G",
+      "dd_point_m": 1.01,
+      "dd_point_f": 1.11
+    },
+    {
+      "airname": "7p",
+      "dd_point_m": 0.88,
+      "dd_point_f": 0.98
+    },
+    {
+      "airname": "10",
+      "dd_point_m": 1.02,
+      "dd_point_f": 1.12
+    },
+    {
+      "airname": "10G",
+      "dd_point_m": 1.2,
+      "dd_point_f": 1.3
+    },
+    {
+      "airname": "10p",
+      "dd_point_m": 1.05,
+      "dd_point_f": 1.15
+    },
+    {
+      "airname": "D",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "DD",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "DDD",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "DDDG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "DDG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "DDS",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "DDT",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "DDTS",
+      "dd_point_m": 0.74,
+      "dd_point_f": 0.84
+    },
+    {
+      "airname": "DDTT",
+      "dd_point_m": 0.74,
+      "dd_point_f": 0.84
+    },
+    {
+      "airname": "DDTTS",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "DG",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "DK",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "DKG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "DS",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "DSG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "DT",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "DTG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "DTS",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "DTSG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "DTT",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "DTTG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "DTTS",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "DTTSG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "DXS",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "DXSG",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "K",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "KD",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "KDD",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "KM",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "KMG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "KT",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "KTT",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "KX",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "KXG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "KY",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "KYG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "M",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "MG",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "MS",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "MSG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "S",
+      "dd_point_m": 0.38,
+      "dd_point_f": 0.48
+    },
+    {
+      "airname": "SD",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SDG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SG",
+      "dd_point_m": 0.38,
+      "dd_point_f": 0.48
+    },
+    {
+      "airname": "SM",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SS",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "SSG",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "SSS",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "SSSG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "ST",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "STG",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "STK",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "STKG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "STS",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "STSG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "STT",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "STTG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "STTK",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "STTKG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "STTS",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "STTSG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "STTX",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "STTXG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "STTY",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "STTYG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "STX",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "STXG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "STY",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "STYG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "SX",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SXG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SXS",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "SXSG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "SXSXS",
+      "dd_point_m": 0.82,
+      "dd_point_f": 0.92
+    },
+    {
+      "airname": "SY",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SYG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "SYS",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "SYSG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "SZ",
+      "dd_point_m": 0.51,
+      "dd_point_f": 0.61
+    },
+    {
+      "airname": "SZG",
+      "dd_point_m": 0.51,
+      "dd_point_f": 0.61
+    },
+    {
+      "airname": "T",
+      "dd_point_m": 0.38,
+      "dd_point_f": 0.48
+    },
+    {
+      "airname": "TD",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "TDG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "TG",
+      "dd_point_m": 0.38,
+      "dd_point_f": 0.48
+    },
+    {
+      "airname": "TK",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "TKG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "TM",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "TMG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "TS",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "TSG",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "TSS",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TSSG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TST",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TSTG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TSTS",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "TSTSG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "TT",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "TTD",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "TTDD",
+      "dd_point_m": 0.74,
+      "dd_point_f": 0.84
+    },
+    {
+      "airname": "TTDDG",
+      "dd_point_m": 0.74,
+      "dd_point_f": 0.84
+    },
+    {
+      "airname": "TTG",
+      "dd_point_m": 0.49,
+      "dd_point_f": 0.59
+    },
+    {
+      "airname": "TTK",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "TTKG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "TTS",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TTSG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TTT",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TTTG",
+      "dd_point_m": 0.59,
+      "dd_point_f": 0.69
+    },
+    {
+      "airname": "TTTS",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "TTTSG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "TTTT",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "TTTTG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "TTTTS",
+      "dd_point_m": 0.76,
+      "dd_point_f": 0.86
+    },
+    {
+      "airname": "TTTTT",
+      "dd_point_m": 0.76,
+      "dd_point_f": 0.86
+    },
+    {
+      "airname": "TTTTTG",
+      "dd_point_m": 0.76,
+      "dd_point_f": 0.86
+    },
+    {
+      "airname": "X",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "XG",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "XK",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "XKG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "XKX",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "XKXG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "XS",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "XSG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "XSX",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "XSXG",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "XTT",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "XTTG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "XTTS",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "XTTSG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "XTTT",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "XTTTG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "XTTX",
+      "dd_point_m": 0.74,
+      "dd_point_f": 0.84
+    },
+    {
+      "airname": "Y",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "YG",
+      "dd_point_m": 0.41,
+      "dd_point_f": 0.51
+    },
+    {
+      "airname": "YK",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "YKG",
+      "dd_point_m": 0.55,
+      "dd_point_f": 0.65
+    },
+    {
+      "airname": "YKX",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "YKXG",
+      "dd_point_m": 0.68,
+      "dd_point_f": 0.78
+    },
+    {
+      "airname": "YS",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "YS",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "YSG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "YSG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "YT",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "YTG",
+      "dd_point_m": 0.52,
+      "dd_point_f": 0.62
+    },
+    {
+      "airname": "YTS",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "YTSG",
+      "dd_point_m": 0.62,
+      "dd_point_f": 0.72
+    },
+    {
+      "airname": "YTTS",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "YTTSG",
+      "dd_point_m": 0.71,
+      "dd_point_f": 0.81
+    },
+    {
+      "airname": "YXS",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "YXSG",
+      "dd_point_m": 0.65,
+      "dd_point_f": 0.75
+    },
+    {
+      "airname": "Z",
+      "dd_point_m": 0.4,
+      "dd_point_f": 0.5
+    },
+    {
+      "airname": "ZG",
+      "dd_point_m": 0.4,
+      "dd_point_f": 0.5
+    },
+    {
+      "airname": "ZSG",
+      "dd_point_m": 0.51,
+      "dd_point_f": 0.61
+    }
+  ]
+}

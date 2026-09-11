@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+
+# Xcode build products
+build/
+DerivedData/
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Signing / provisioning
+*.cer
+*.p12
+*.mobileprovision
+
+# Exported/archive builds
+MTJudge 2024-11-10 12-43-51/
+
+# Dropbox conflict copies
+*競合コピー*
+*競合コピー*
+
+# Backup / temporary files
+*.BAK
+*.bak
+*.tmp
+*.swp
+*~
+
+# Swift Package Manager generated files
+.build/
