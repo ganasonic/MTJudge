@@ -1,9 +1,81 @@
 #import "VideoRecordingViewController.h"
-#import "TagSelectionViewController.h"
 #import "TagListViewController.h" // 追加
+#import "TagSelectionViewController.h"
+#import "FileSaver.h"
 #import <AudioToolbox/AudioToolbox.h>
 #import <Vision/Vision.h>
+#import "SkeletonConnections.h"
 #import <QuartzCore/QuartzCore.h>
+
+// トラックの任意の位置へのタップと、そのままのドラッグに対応する。
+@interface PlaybackSlider : UISlider
+@end
+@implementation PlaybackSlider
+- (void)updateWithTouch:(UITouch *)touch {
+    CGRect track = [self trackRectForBounds:self.bounds];
+    CGRect first = [self thumbRectForBounds:self.bounds trackRect:track value:self.minimumValue];
+    CGRect last = [self thumbRectForBounds:self.bounds trackRect:track value:self.maximumValue];
+    CGFloat width = CGRectGetMidX(last) - CGRectGetMidX(first);
+    CGFloat fraction = width != 0 ? ([touch locationInView:self].x - CGRectGetMidX(first)) / width : 0;
+    self.value = self.minimumValue + MIN(1, MAX(0, fraction)) * (self.maximumValue - self.minimumValue);
+    [self sendActionsForControlEvents:UIControlEventValueChanged];
+}
+- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    self.highlighted = YES;
+    [self sendActionsForControlEvents:UIControlEventEditingDidBegin];
+    [self updateWithTouch:touch];
+    return YES;
+}
+- (BOOL)continueTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    [self updateWithTouch:touch];
+    return YES;
+}
+- (void)endTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    if (touch) [self updateWithTouch:touch];
+    self.highlighted = NO;
+    [self sendActionsForControlEvents:UIControlEventEditingDidEnd];
+}
+- (void)cancelTrackingWithEvent:(UIEvent *)event {
+    self.highlighted = NO;
+    [self sendActionsForControlEvents:UIControlEventEditingDidEnd];
+}
+@end
+
+@interface VideoRecordingViewController () <UIDocumentPickerDelegate>
+@property (nonatomic, strong) NSURL *pendingRecordingURL;
+@property (nonatomic, strong) UIDocumentPickerViewController *downloadsPicker;
+@property (nonatomic, copy) void (^downloadsReadyHandler)(void);
+@property (nonatomic, strong) NSURL *latestRecordingURL;
+@property (nonatomic, strong) UIButton *playButton;
+@property (nonatomic, strong) UIButton *skeletonButton;
+@property (nonatomic, strong) UIButton *tagButton;
+@property (nonatomic, strong) UIButton *saveButton;
+@property (nonatomic, strong) UIActivityIndicatorView *recordingActivity;
+@property (nonatomic, strong) UIVisualEffectView *zoomControls;
+@property (nonatomic, strong) UIButton *zoomInButton;
+@property (nonatomic, strong) UIButton *zoomOutButton;
+@property (nonatomic, strong) UILabel *zoomLabel;
+@property (nonatomic, strong) UIPinchGestureRecognizer *zoomPinch;
+@property (nonatomic, assign) CGFloat requestedZoom;
+@property (nonatomic, assign) CGFloat pinchStartZoom;
+@property (nonatomic, assign) NSUInteger zoomRequestGeneration;
+@property (nonatomic, strong) AVPlayer *player;
+@property (nonatomic, strong) AVPlayerLayer *playerLayer;
+@property (nonatomic, strong) UIView *playbackView;
+@property (nonatomic, assign) BOOL finishingRecording;
+@property (nonatomic, strong) UIVisualEffectView *playbackControls;
+@property (nonatomic, strong) NSLayoutConstraint *cameraControlsBottomConstraint;
+@property (nonatomic, strong) PlaybackSlider *positionSlider;
+@property (nonatomic, strong) PlaybackSlider *speedSlider;
+@property (nonatomic, strong) UILabel *elapsedLabel;
+@property (nonatomic, strong) UILabel *durationLabel;
+@property (nonatomic, strong) UILabel *speedLabel;
+@property (nonatomic, strong) id playbackTimeObserver;
+@property (nonatomic, assign) float playbackSpeed;
+@property (nonatomic, assign) BOOL scrubbing;
+@property (nonatomic, assign) BOOL seeking;
+@property (nonatomic, assign) CMTime requestedSeekTime;
+@end
 
 @implementation VideoRecordingViewController
 
@@ -18,6 +90,14 @@
 
     // 初期状態で描画を有効にする
     self.isSkeletonDrawingEnabled = NO;
+    NSString *latestPath = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestCameraRecordingPath"];
+    if (latestPath && [[NSFileManager defaultManager] fileExistsAtPath:latestPath]) {
+        self.latestRecordingURL = [NSURL fileURLWithPath:latestPath];
+    }
+    self.playbackSpeed = 1.0;
+    self.requestedZoom = 1.0;
+    [self setupCameraControls];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackEnded:) name:UIApplicationDidEnterBackgroundNotification object:nil];
 
     dispatch_queue_t cameraQueue = dispatch_queue_create("com.MTJudge.cameraSetupQueue", DISPATCH_QUEUE_SERIAL);
     dispatch_async(cameraQueue, ^{
@@ -31,29 +111,200 @@
             self.drawingLayer = [CALayer layer];
             self.drawingLayer.frame = self.previewView.bounds;
             [self.previewView.layer addSublayer:self.drawingLayer];
+            self.requestedZoom = self.videoRecorder.zoomFactor;
+            [self updateZoomControls];
         });
     });
 }
 
 #pragma mark - VideoRecorderDelegate
 
-// 録画が正常に終了した場合、TagSelectionViewControllerを表示
+// ファイルの書き込み完了後、メインスレッドで保存先を選択する。
 - (void)videoRecorder:(id)recorder didFinishRecordingToOutputFileURL:(NSURL *)outputFileURL error:(NSError *)error {
-    NSLog(@"didFinishRecordingToOutputFileAtURL @VideoRecordingViewController Video recording error: %@", error.localizedDescription);
-    
-    if(error){
-        [self.recordButton setTitle:@"Error" forState:UIControlStateNormal];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.finishingRecording = NO;
+        [self updateCameraControls];
+        BOOL finishedSuccessfully = !error || [error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] boolValue];
+        if (!finishedSuccessfully) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画できませんでした"
+                                                                                   message:error.localizedDescription
+                                                                            preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+        NSURL *directory = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+        directory = [directory URLByAppendingPathComponent:@"CameraRecordings" isDirectory:YES];
+        NSError *storageError = nil;
+        [[NSFileManager defaultManager] createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&storageError];
+        NSURL *localURL = [directory URLByAppendingPathComponent:outputFileURL.lastPathComponent];
+        if (!storageError && [[NSFileManager defaultManager] moveItemAtURL:outputFileURL toURL:localURL error:&storageError]) {
+            NSURL *previousURL = self.latestRecordingURL;
+            [[NSUserDefaults standardUserDefaults] setObject:localURL.path forKey:@"LatestCameraRecordingPath"];
+            if (previousURL && [previousURL.URLByDeletingLastPathComponent isEqual:directory] && ![previousURL isEqual:localURL]) {
+                [[NSFileManager defaultManager] removeItemAtURL:previousURL error:NULL];
+            }
+        } else {
+            localURL = outputFileURL;
+            NSLog(@"Could not retain recording: %@", storageError);
+        }
+        // 保存先での移動・削除に影響されない再生用コピーを保持する。
+        self.latestRecordingURL = localURL;
+        self.pendingRecordingURL = localURL;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+        [self updateCameraControls];
+        [self presentRecordingReview];
+    });
+}
+
+- (void)presentRecordingReview {
+    if (!self.pendingRecordingURL || self.presentedViewController) return;
+    TagSelectionViewController *review = [[TagSelectionViewController alloc] initWithVideoFileURL:self.pendingRecordingURL];
+    review.selections = [[NSUserDefaults standardUserDefaults] arrayForKey:@"LatestCameraRecordingTags"] ?: @[];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:review];
+    navigation.modalPresentationStyle = UIModalPresentationFormSheet;
+    navigation.modalInPresentation = YES;
+    __weak typeof(self) weakSelf = self;
+    void (^finish)(NSArray *, BOOL) = ^(NSArray<NSDictionary<NSString *, NSString *> *> *selections, BOOL exportVideo) {
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        NSError *error = nil;
+        if (selections.count) {
+            NSMutableArray *names = [NSMutableArray array];
+            NSCharacterSet *unsafe = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r"];
+            for (NSDictionary *selection in selections) {
+                NSString *name = [[selection[@"name"] componentsSeparatedByCharactersInSet:unsafe] componentsJoinedByString:@"-"];
+                [names addObject:[name substringToIndex:MIN(name.length, 24)]];
+            }
+            NSString *suffix = NSUUID.UUID.UUIDString;
+            NSString *prefix = [names componentsJoinedByString:@"_"];
+            prefix = [prefix substringToIndex:MIN(prefix.length, 60)];
+            NSURL *taggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.mov", prefix, suffix]];
+            if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:taggedURL error:&error]) {
+                self.pendingRecordingURL = taggedURL;
+                self.latestRecordingURL = taggedURL;
+                [[NSUserDefaults standardUserDefaults] setObject:taggedURL.path forKey:@"LatestCameraRecordingPath"];
+                // カテゴリ名とタグIDも動画に関連付けてアプリ内に保持する。
+                [[NSUserDefaults standardUserDefaults] setObject:selections forKey:@"LatestCameraRecordingTags"];
+            }
+        } else {
+            NSURL *untaggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"mov"]];
+            if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:untaggedURL error:&error]) {
+                self.pendingRecordingURL = untaggedURL;
+                self.latestRecordingURL = untaggedURL;
+                [[NSUserDefaults standardUserDefaults] setObject:untaggedURL.path forKey:@"LatestCameraRecordingPath"];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+            }
+        }
+        if (error) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"タグを保存できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self.presentedViewController presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+        if (exportVideo) {
+            [self dismissViewControllerAnimated:YES completion:^{ [self presentRecordingSavePicker]; }];
+            return;
+        }
+        UIViewController *screen = self.presentedViewController;
+        screen.view.userInteractionEnabled = NO;
+        NSURL *sourceURL = self.pendingRecordingURL;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSError *saveError = nil;
+            NSURL *savedURL = [[[FileSaver alloc] init] saveVideo:sourceURL selections:selections error:&saveError];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                screen.view.userInteractionEnabled = YES;
+                if (!savedURL) {
+                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"保存できませんでした" message:saveError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+                    [alert addAction:[UIAlertAction actionWithTitle:@"保存先を再設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                        [FileSaver forgetDownloadsDirectory];
+                        [self chooseDownloadsDirectoryWithCompletion:nil];
+                    }]];
+                    [screen presentViewController:alert animated:YES completion:nil];
+                    return;
+                }
+                // 外部フォルダの権限や移動に左右されず最新動画を再生できるよう、
+                // アプリ内には直近の1本だけ再生用コピーを保持する。
+                self.latestRecordingURL = sourceURL;
+                self.pendingRecordingURL = nil;
+                [[NSUserDefaults standardUserDefaults] setObject:sourceURL.path forKey:@"LatestCameraRecordingPath"];
+                [self updateCameraControls];
+                [self dismissViewControllerAnimated:YES completion:^{
+                    UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, @"動画を保存しました");
+                }];
+            });
+        });
+    };
+    review.saveHandler = ^(NSArray *selections) {
+        if ([FileSaver hasDownloadsDirectory]) {
+            finish(selections, NO);
+        } else {
+            [weakSelf chooseDownloadsDirectoryWithCompletion:^{ finish(selections, NO); }];
+        }
+    };
+    review.exportHandler = ^(NSArray *selections) { finish(selections, YES); };
+    [self presentViewController:navigation animated:YES completion:nil];
+}
+
+- (void)chooseDownloadsDirectoryWithCompletion:(void (^)(void))completion {
+    if (self.downloadsPicker) return;
+    self.downloadsReadyHandler = completion;
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.folder"] inMode:UIDocumentPickerModeOpen];
+    picker.title = @"ダウンロードフォルダを選択";
+    picker.allowsMultipleSelection = NO;
+    picker.delegate = self;
+    picker.modalPresentationStyle = UIModalPresentationFormSheet;
+    self.downloadsPicker = picker;
+    [self.presentedViewController presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)presentRecordingSavePicker {
+    if (!self.pendingRecordingURL || self.presentedViewController) {
         return;
     }
-    // Main.storyboardからTagSelectionViewControllerを取得
-    UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"Main" bundle:nil];
-    TagSelectionViewController *tagVC = [storyboard instantiateViewControllerWithIdentifier:@"TagSelectionViewController"];
-    // 録画したビデオのURLをTagSelectionViewControllerに渡す
-    tagVC.videoFileURL = outputFileURL;
+    UIDocumentPickerViewController *picker;
+    if (@available(iOS 14.0, *)) {
+        picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[self.pendingRecordingURL] asCopy:YES];
+    } else {
+        picker = [[UIDocumentPickerViewController alloc] initWithURL:self.pendingRecordingURL inMode:UIDocumentPickerModeExportToService];
+    }
+    picker.delegate = self;
+    picker.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:picker animated:YES completion:nil];
+}
 
-    // ナビゲーションコントローラーを介してTagSelectionViewControllerを表示
-    UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:tagVC];
-    [self presentViewController:navController animated:YES completion:nil];
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    if (controller == self.downloadsPicker) {
+        NSError *error = nil;
+        BOOL remembered = urls.count && [FileSaver rememberDownloadsDirectory:urls.firstObject error:&error];
+        void (^ready)(void) = self.downloadsReadyHandler;
+        self.downloadsReadyHandler = nil;
+        self.downloadsPicker = nil;
+        [controller dismissViewControllerAnimated:YES completion:^{
+            if (remembered) {
+                if (ready) ready();
+            } else {
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"保存先を登録できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [self.presentedViewController presentViewController:alert animated:YES completion:nil];
+            }
+        }];
+        return;
+    }
+    if (urls.count == 0) {
+        return;
+    }
+    self.pendingRecordingURL = nil;
+    [self updateCameraControls];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    if (controller == self.downloadsPicker) {
+        self.downloadsPicker = nil;
+        self.downloadsReadyHandler = nil;
+    }
+    [self updateCameraControls];
 }
 
 // フレームごとに呼び出されるデリゲートメソッド
@@ -130,30 +381,7 @@
        各内部配列は、線で結びつけるべき2つの関節（Joint）を文字列で指定してる
        各配列は始点と終点の関節をセットで持っている
     */
-    NSArray<NSArray<NSString *>*> *bodyConnections = @[
-        // 胴体
-        @[VNHumanBodyPoseObservationJointNameNeck, VNHumanBodyPoseObservationJointNameRightShoulder],
-        @[VNHumanBodyPoseObservationJointNameNeck, VNHumanBodyPoseObservationJointNameLeftShoulder],
-        @[VNHumanBodyPoseObservationJointNameRightShoulder, VNHumanBodyPoseObservationJointNameRightHip],
-        @[VNHumanBodyPoseObservationJointNameLeftShoulder, VNHumanBodyPoseObservationJointNameLeftHip],
-        @[VNHumanBodyPoseObservationJointNameRightHip, VNHumanBodyPoseObservationJointNameLeftHip],
-        
-        // 右腕
-        @[VNHumanBodyPoseObservationJointNameRightShoulder, VNHumanBodyPoseObservationJointNameRightElbow],
-        @[VNHumanBodyPoseObservationJointNameRightElbow, VNHumanBodyPoseObservationJointNameRightWrist],
-        
-        // 左腕
-        @[VNHumanBodyPoseObservationJointNameLeftShoulder, VNHumanBodyPoseObservationJointNameLeftElbow],
-        @[VNHumanBodyPoseObservationJointNameLeftElbow, VNHumanBodyPoseObservationJointNameLeftWrist],
-        
-        // 右足
-        @[VNHumanBodyPoseObservationJointNameRightHip, VNHumanBodyPoseObservationJointNameRightKnee],
-        @[VNHumanBodyPoseObservationJointNameRightKnee, VNHumanBodyPoseObservationJointNameRightAnkle],
-        
-        // 左足
-        @[VNHumanBodyPoseObservationJointNameLeftHip, VNHumanBodyPoseObservationJointNameLeftKnee],
-        @[VNHumanBodyPoseObservationJointNameLeftKnee, VNHumanBodyPoseObservationJointNameLeftAnkle]
-    ];
+    NSArray<NSArray<NSString *> *> *bodyConnections = SkeletonConnections();
     
     // 各関節ペアに対して線を描画
     /* 各関節ペア（bodyConnections）をループで処理して、関節間に線を引くための座標を計算し、
@@ -234,39 +462,467 @@
 - (IBAction)toggleSkeletonDrawing:(id)sender {
     // 描画の状態を反転させる
     self.isSkeletonDrawingEnabled = !self.isSkeletonDrawingEnabled;
+    self.videoRecorder.skeletonDrawingEnabled = self.isSkeletonDrawingEnabled;
     
     // 描画が無効になったら、画面上の線をすべて消去する
     if (!self.isSkeletonDrawingEnabled) {
         [self clearDrawing];
     }
     
-    // ボタンのタイトルを更新する
-    UIButton *button = (UIButton *)sender;
-    if (self.isSkeletonDrawingEnabled) {
-        [button setTitle:@"FrameOff" forState:UIControlStateNormal]; // ここを「FrmON」に変更
-    } else {
-        [button setTitle:@"Frame" forState:UIControlStateNormal]; // ここを「FrmOFF」に変更
-    }
+    [self updateCameraControls];
 }
 
 // タグ管理画面に遷移するメソッドを追加
 - (IBAction)manageTagsButtonTapped:(id)sender {
+    if (self.pendingRecordingURL) {
+        [self presentRecordingReview];
+        return;
+    }
     TagListViewController *tagListVC = [[TagListViewController alloc] init];
     UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:tagListVC];
     [self presentViewController:navController animated:YES completion:nil];
 }
 
 - (IBAction)recordButtonTapped:(id)sender {
-    NSLog(@"recordButtonTapped is called %@", [self.videoRecorder isRecording]?@"rec":@"stop");
-    if ([self.videoRecorder isRecording]) {
+    if (self.finishingRecording || self.player) return;
+    if (self.videoRecorder.isRecording) {
+        self.finishingRecording = YES;
         [self.videoRecorder stopRecording];
         AudioServicesPlaySystemSound(1306);
-        [self.recordButton setTitle:@"Rec" forState:UIControlStateNormal];
     } else {
+        if (self.pendingRecordingURL) {
+            [self presentRecordingSavePicker];
+            return;
+        }
         [self.videoRecorder startRecording];
         AudioServicesPlaySystemSound(1305);
-        [self.recordButton setTitle:@"Stop" forState:UIControlStateNormal];
     }
+    [self updateCameraControls];
+}
+
+- (UIButton *)cameraButtonWithAction:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.layer.cornerRadius = 14;
+    button.layer.borderWidth = 1;
+    button.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.10].CGColor;
+    button.contentEdgeInsets = UIEdgeInsetsMake(10, 10, 10, 10);
+    button.tintColor = UIColor.whiteColor;
+    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    [button.heightAnchor constraintEqualToConstant:48].active = YES;
+    NSLayoutConstraint *width = [button.widthAnchor constraintEqualToConstant:48];
+    width.priority = 999; // 非表示の保存ボタンはスタック内で折りたたむ。
+    width.active = YES;
+    return button;
+}
+
+- (void)styleButton:(UIButton *)button title:(NSString *)title symbol:(NSString *)symbol color:(UIColor *)color {
+    [button setTitle:nil forState:UIControlStateNormal];
+    if (@available(iOS 13.0, *)) {
+        [button setImage:[UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    }
+    button.backgroundColor = [color colorWithAlphaComponent:0.22];
+    button.accessibilityLabel = title;
+    button.alpha = button.enabled ? 0.85 : 0.30;
+}
+
+- (void)setupCameraControls {
+    self.playbackView = [[UIView alloc] init];
+    self.playbackView.backgroundColor = UIColor.blackColor;
+    self.playbackView.hidden = YES;
+    self.playbackView.userInteractionEnabled = NO;
+    self.playbackView.frame = self.previewView.bounds;
+    self.playbackView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.previewView addSubview:self.playbackView];
+
+    UIVisualEffectView *panel = [[UIVisualEffectView alloc] initWithEffect:nil];
+    panel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+    panel.translatesAutoresizingMaskIntoConstraints = NO;
+    panel.layer.cornerRadius = 24;
+    panel.clipsToBounds = YES;
+    [self.view addSubview:panel];
+    self.recordButton = [self cameraButtonWithAction:@selector(recordButtonTapped:)];
+    self.recordingActivity = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+    self.recordingActivity.translatesAutoresizingMaskIntoConstraints = NO;
+    self.recordingActivity.hidesWhenStopped = YES;
+    [self.recordButton addSubview:self.recordingActivity];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.recordingActivity.centerXAnchor constraintEqualToAnchor:self.recordButton.centerXAnchor],
+        [self.recordingActivity.centerYAnchor constraintEqualToAnchor:self.recordButton.centerYAnchor]
+    ]];
+    self.playButton = [self cameraButtonWithAction:@selector(togglePlayback:)];
+    self.skeletonButton = [self cameraButtonWithAction:@selector(toggleSkeletonDrawing:)];
+    self.tagButton = [self cameraButtonWithAction:@selector(manageTagsButtonTapped:)];
+    self.saveButton = [self cameraButtonWithAction:@selector(presentRecordingSavePicker)];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.recordButton, self.playButton, self.skeletonButton, self.tagButton, self.saveButton]];
+    stack.axis = UILayoutConstraintAxisHorizontal;
+    stack.spacing = 8;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel.contentView addSubview:stack];
+    self.cameraControlsBottomConstraint = [panel.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8];
+    [NSLayoutConstraint activateConstraints:@[
+        [panel.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+        self.cameraControlsBottomConstraint,
+        [stack.leadingAnchor constraintEqualToAnchor:panel.contentView.leadingAnchor constant:8],
+        [stack.trailingAnchor constraintEqualToAnchor:panel.contentView.trailingAnchor constant:-8],
+        [stack.topAnchor constraintEqualToAnchor:panel.contentView.topAnchor constant:8],
+        [stack.bottomAnchor constraintEqualToAnchor:panel.contentView.bottomAnchor constant:-8]
+    ]];
+    [self setupPlaybackControls];
+    [self setupZoomControls];
+    [self updateCameraControls];
+}
+
+- (void)updateCameraControls {
+    BOOL recording = self.videoRecorder.isRecording;
+    BOOL playing = self.player != nil;
+    self.playbackControls.hidden = !playing;
+    [self updateZoomControls];
+    if (playing) [self.playbackControls.superview bringSubviewToFront:self.playbackControls];
+    [self updateCameraControlsPosition];
+    self.recordButton.enabled = !playing && !self.finishingRecording && !self.pendingRecordingURL;
+    self.playButton.enabled = self.latestRecordingURL != nil && !recording && !self.finishingRecording;
+    self.skeletonButton.enabled = !playing;
+    self.tagButton.enabled = !recording && !playing && !self.finishingRecording;
+    self.saveButton.hidden = !self.pendingRecordingURL;
+    self.saveButton.enabled = !playing;
+    UIColor *neutral = [UIColor colorWithWhite:0.22 alpha:0.95];
+    [self styleButton:self.recordButton title:recording ? @"録画停止" : @"録画開始" symbol:recording ? @"stop.fill" : @"record.circle" color:UIColor.systemRedColor];
+    if (self.finishingRecording) {
+        [self.recordButton setImage:nil forState:UIControlStateNormal];
+        self.recordButton.accessibilityLabel = @"録画した動画を処理中";
+        [self.recordingActivity startAnimating];
+    } else {
+        [self.recordingActivity stopAnimating];
+    }
+    [self styleButton:self.playButton title:playing ? @"再生停止" : @"最新動画を再生" symbol:playing ? @"stop.fill" : @"play.fill" color:UIColor.systemBlueColor];
+    [self styleButton:self.skeletonButton title:self.isSkeletonDrawingEnabled ? @"骨格を非表示" : @"骨格を表示" symbol:@"figure.walk" color:self.isSkeletonDrawingEnabled ? [UIColor colorWithRed:0.08 green:0.45 blue:0.28 alpha:1] : neutral];
+    self.skeletonButton.accessibilityValue = self.isSkeletonDrawingEnabled ? @"表示中" : @"非表示";
+    [self styleButton:self.tagButton title:@"タグ設定" symbol:@"tag.fill" color:neutral];
+    [self styleButton:self.saveButton title:@"保存先を選択" symbol:@"square.and.arrow.down" color:neutral];
+}
+
+- (void)setupZoomControls {
+    self.zoomPinch = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(pinchCamera:)];
+    [self.previewView addGestureRecognizer:self.zoomPinch];
+    self.previewView.userInteractionEnabled = YES;
+    self.zoomControls = [[UIVisualEffectView alloc] initWithEffect:nil];
+    self.zoomControls.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+    self.zoomControls.translatesAutoresizingMaskIntoConstraints = NO;
+    self.zoomControls.layer.cornerRadius = 18;
+    self.zoomControls.clipsToBounds = YES;
+    [self.view addSubview:self.zoomControls];
+    self.zoomOutButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoomInButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.zoomOutButton setImage:[UIImage systemImageNamed:@"minus.magnifyingglass"] forState:UIControlStateNormal];
+    [self.zoomInButton setImage:[UIImage systemImageNamed:@"plus.magnifyingglass"] forState:UIControlStateNormal];
+    self.zoomOutButton.accessibilityLabel = @"ズームアウト";
+    self.zoomInButton.accessibilityLabel = @"ズームイン";
+    [self.zoomOutButton addTarget:self action:@selector(zoomOut:) forControlEvents:UIControlEventTouchUpInside];
+    [self.zoomInButton addTarget:self action:@selector(zoomIn:) forControlEvents:UIControlEventTouchUpInside];
+    for (UIButton *button in @[self.zoomOutButton, self.zoomInButton]) {
+        button.tintColor = UIColor.whiteColor;
+        [button.widthAnchor constraintEqualToConstant:44].active = YES;
+        [button.heightAnchor constraintEqualToConstant:44].active = YES;
+    }
+    self.zoomLabel = [[UILabel alloc] init];
+    self.zoomLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+    self.zoomLabel.textColor = UIColor.whiteColor;
+    self.zoomLabel.textAlignment = NSTextAlignmentCenter;
+    self.zoomLabel.accessibilityLabel = @"ズーム倍率";
+    [self.zoomLabel.widthAnchor constraintGreaterThanOrEqualToConstant:52].active = YES;
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[self.zoomOutButton, self.zoomLabel, self.zoomInButton]];
+    row.alignment = UIStackViewAlignmentCenter;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoomControls.contentView addSubview:row];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.zoomControls.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.zoomControls.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+        [row.topAnchor constraintEqualToAnchor:self.zoomControls.contentView.topAnchor],
+        [row.bottomAnchor constraintEqualToAnchor:self.zoomControls.contentView.bottomAnchor],
+        [row.leadingAnchor constraintEqualToAnchor:self.zoomControls.contentView.leadingAnchor constant:4],
+        [row.trailingAnchor constraintEqualToAnchor:self.zoomControls.contentView.trailingAnchor constant:-4]
+    ]];
+    [self updateZoomControls];
+}
+
+- (void)updateZoomControls {
+    BOOL available = !self.player && !self.finishingRecording && !self.pendingRecordingURL;
+    CGFloat minimum = self.videoRecorder.minimumZoomFactor;
+    CGFloat maximum = self.videoRecorder.maximumZoomFactor;
+    self.zoomControls.hidden = !available;
+    self.zoomPinch.enabled = available && maximum > minimum;
+    self.zoomOutButton.enabled = available && self.requestedZoom > minimum + 0.01;
+    self.zoomInButton.enabled = available && self.requestedZoom < maximum - 0.01;
+    self.zoomLabel.text = [NSString stringWithFormat:@"%.1f×", self.requestedZoom];
+    self.zoomLabel.accessibilityValue = self.zoomLabel.text;
+}
+
+- (void)changeCameraZoom:(CGFloat)factor {
+    if (!isfinite(factor) || self.player || self.finishingRecording || self.pendingRecordingURL) return;
+    self.requestedZoom = MIN(self.videoRecorder.maximumZoomFactor, MAX(self.videoRecorder.minimumZoomFactor, factor));
+    NSUInteger generation = ++self.zoomRequestGeneration;
+    [self updateZoomControls];
+    __weak typeof(self) weakSelf = self;
+    [self.videoRecorder setZoomFactor:self.requestedZoom completion:^(CGFloat actual, NSError *error) {
+        typeof(self) self = weakSelf;
+        if (!self || generation != self.zoomRequestGeneration) return;
+        self.requestedZoom = actual;
+        [self updateZoomControls];
+        if (error && !self.presentedViewController) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"ズームを変更できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+        }
+    }];
+}
+- (void)zoomIn:(id)sender { [self changeCameraZoom:self.requestedZoom + 0.5]; }
+- (void)zoomOut:(id)sender { [self changeCameraZoom:self.requestedZoom - 0.5]; }
+- (void)pinchCamera:(UIPinchGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) self.pinchStartZoom = self.requestedZoom;
+    if (gesture.state == UIGestureRecognizerStateBegan || gesture.state == UIGestureRecognizerStateChanged) {
+        [self changeCameraZoom:self.pinchStartZoom * gesture.scale];
+    }
+}
+
+- (void)togglePlayback:(id)sender {
+    if (self.player) {
+        [self stopPlayback];
+        return;
+    }
+    if (!self.latestRecordingURL || self.videoRecorder.isRecording || self.finishingRecording) return;
+    AVPlayerItem *item = [AVPlayerItem playerItemWithURL:self.latestRecordingURL];
+    self.player = [AVPlayer playerWithPlayerItem:item];
+    self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
+    self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
+    self.playerLayer.frame = self.playbackView.bounds;
+    [self.playbackView.layer addSublayer:self.playerLayer];
+    [self.previewView bringSubviewToFront:self.playbackView];
+    self.playbackView.hidden = NO;
+    self.drawingLayer.hidden = YES;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackEnded:) name:AVPlayerItemDidPlayToEndTimeNotification object:item];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackFailed:) name:AVPlayerItemFailedToPlayToEndTimeNotification object:item];
+    [item addObserver:self forKeyPath:@"status" options:NSKeyValueObservingOptionNew context:NULL];
+    self.requestedSeekTime = kCMTimeInvalid;
+    [self updatePlaybackProgress];
+    __weak typeof(self) weakSelf = self;
+    self.playbackTimeObserver = [self.player addPeriodicTimeObserverForInterval:CMTimeMake(1, 10) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
+        [weakSelf updatePlaybackProgress];
+    }];
+    self.player.rate = self.playbackSpeed;
+    [self updateCameraControls];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (object == self.player.currentItem && [keyPath isEqualToString:@"status"]) {
+        if (self.player.currentItem.status == AVPlayerItemStatusFailed) {
+            dispatch_async(dispatch_get_main_queue(), ^{ if (object == self.player.currentItem) [self playbackFailed:nil]; });
+        }
+        return;
+    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+- (void)playbackEnded:(NSNotification *)notification {
+    if ([notification.name isEqualToString:AVPlayerItemDidPlayToEndTimeNotification] && (self.scrubbing || self.seeking)) return;
+    [self stopPlayback];
+}
+
+- (void)playbackFailed:(NSNotification *)notification {
+    [self stopPlayback];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"再生できませんでした" message:@"動画を読み込めませんでした。もう一度お試しください。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    if (!self.presentedViewController) [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)stopPlayback {
+    if (self.playbackTimeObserver) {
+        [self.player removeTimeObserver:self.playbackTimeObserver];
+        self.playbackTimeObserver = nil;
+    }
+    self.scrubbing = NO;
+    self.seeking = NO;
+    self.requestedSeekTime = kCMTimeInvalid;
+    if (self.player) {
+        [self.player.currentItem removeObserver:self forKeyPath:@"status"];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:AVPlayerItemDidPlayToEndTimeNotification object:self.player.currentItem];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:AVPlayerItemFailedToPlayToEndTimeNotification object:self.player.currentItem];
+    }
+    [self.player pause];
+    [self.playerLayer removeFromSuperlayer];
+    self.playerLayer = nil;
+    self.player = nil;
+    self.playbackView.hidden = YES;
+    self.drawingLayer.hidden = NO;
+    [self updateCameraControls];
+}
+
+- (UILabel *)playbackLabel {
+    UILabel *label = [[UILabel alloc] init];
+    label.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightMedium];
+    label.textColor = UIColor.whiteColor;
+    [label setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [label setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    return label;
+}
+
+- (void)setupPlaybackControls {
+    self.playbackControls = [[UIVisualEffectView alloc] initWithEffect:nil];
+    self.playbackControls.backgroundColor = [UIColor colorWithWhite:0 alpha:0.18];
+    self.playbackControls.layer.cornerRadius = 16;
+    self.playbackControls.clipsToBounds = YES;
+    self.playbackControls.translatesAutoresizingMaskIntoConstraints = NO;
+    self.playbackControls.hidden = YES;
+    // タブバーと同じ親の最前面に配置し、画面下端まで重ねる。
+    UIView *host = self.tabBarController ? self.tabBarController.view : self.view;
+    [host addSubview:self.playbackControls];
+    self.positionSlider = [[PlaybackSlider alloc] init];
+    self.positionSlider.minimumValue = 0;
+    self.positionSlider.maximumValue = 1;
+    self.positionSlider.accessibilityLabel = @"再生位置";
+    [self.positionSlider addTarget:self action:@selector(beginScrubbing) forControlEvents:UIControlEventEditingDidBegin];
+    [self.positionSlider addTarget:self action:@selector(positionChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.positionSlider addTarget:self action:@selector(endScrubbing) forControlEvents:UIControlEventEditingDidEnd];
+    self.elapsedLabel = [self playbackLabel];
+    self.durationLabel = [self playbackLabel];
+    UIStackView *position = [[UIStackView alloc] initWithArrangedSubviews:@[self.elapsedLabel, self.positionSlider, self.durationLabel]];
+    self.speedSlider = [[PlaybackSlider alloc] init];
+    self.speedSlider.minimumValue = 0.25;
+    self.speedSlider.maximumValue = 2.0;
+    self.speedSlider.value = self.playbackSpeed;
+    self.speedSlider.accessibilityLabel = @"再生速度";
+    [self.speedSlider addTarget:self action:@selector(speedChanged:) forControlEvents:UIControlEventValueChanged];
+    UILabel *slow = [self playbackLabel]; slow.text = @"0.25×";
+    self.speedLabel = [self playbackLabel];
+    self.speedLabel.text = @"1.00×";
+    UILabel *fast = [self playbackLabel]; fast.text = @"2×";
+    UIStackView *speed = [[UIStackView alloc] initWithArrangedSubviews:@[self.speedLabel, slow, self.speedSlider, fast]];
+    for (UIStackView *row in @[position, speed]) {
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 8;
+    }
+    [self.positionSlider.heightAnchor constraintEqualToConstant:44].active = YES;
+    [self.speedSlider.heightAnchor constraintEqualToConstant:44].active = YES;
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[position, speed]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.playbackControls.contentView addSubview:stack];
+    NSLayoutConstraint *width = [self.playbackControls.widthAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.widthAnchor constant:-24];
+    width.priority = 999;
+    [NSLayoutConstraint activateConstraints:@[
+        width, [self.playbackControls.widthAnchor constraintLessThanOrEqualToConstant:560],
+        [self.playbackControls.centerXAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerXAnchor],
+        [self.playbackControls.bottomAnchor constraintEqualToAnchor:host.bottomAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:self.playbackControls.contentView.leadingAnchor constant:12],
+        [stack.trailingAnchor constraintEqualToAnchor:self.playbackControls.contentView.trailingAnchor constant:-12],
+        [stack.topAnchor constraintEqualToAnchor:self.playbackControls.contentView.topAnchor constant:4],
+        [stack.bottomAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.bottomAnchor constant:-4]
+    ]];
+}
+
+- (NSString *)playbackTimeText:(double)seconds {
+    if (!isfinite(seconds) || seconds < 0) return @"--:--";
+    NSInteger total = (NSInteger)seconds;
+    return [NSString stringWithFormat:@"%ld:%02ld", (long)(total / 60), (long)(total % 60)];
+}
+
+- (void)updatePlaybackProgress {
+    double duration = CMTimeGetSeconds(self.player.currentItem.duration);
+    BOOL ready = self.player.currentItem.status == AVPlayerItemStatusReadyToPlay && isfinite(duration) && duration > 0;
+    self.positionSlider.enabled = ready;
+    self.speedSlider.enabled = ready;
+    self.durationLabel.text = [self playbackTimeText:duration];
+    if (!self.scrubbing && !self.seeking) {
+        double elapsed = CMTimeGetSeconds(self.player.currentTime);
+        self.positionSlider.value = ready && isfinite(elapsed) ? elapsed / duration : 0;
+        self.elapsedLabel.text = [self playbackTimeText:elapsed];
+    }
+}
+
+- (void)beginScrubbing {
+    if (!self.player) return;
+    self.scrubbing = YES;
+    [self.player pause];
+}
+
+- (void)positionChanged:(UISlider *)slider {
+    double duration = CMTimeGetSeconds(self.player.currentItem.duration);
+    if (!isfinite(duration) || duration <= 0) return;
+    self.requestedSeekTime = CMTimeMakeWithSeconds(duration * slider.value, 600);
+    self.elapsedLabel.text = [self playbackTimeText:duration * slider.value];
+    [self seekToRequestedPosition];
+}
+
+// ドラッグ中のシークは1件ずつ処理し、古い要求をためず最新位置へ追従する。
+- (void)seekToRequestedPosition {
+    if (!self.player || self.seeking || !CMTIME_IS_VALID(self.requestedSeekTime)) return;
+    self.seeking = YES;
+    AVPlayer *player = self.player;
+    CMTime target = self.requestedSeekTime;
+    __weak typeof(self) weakSelf = self;
+    [player seekToTime:target toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (!self || self.player != player) return;
+            self.seeking = NO;
+            if (CMTimeCompare(target, self.requestedSeekTime) != 0) {
+                [self seekToRequestedPosition];
+            } else if (!self.scrubbing) {
+                double duration = CMTimeGetSeconds(player.currentItem.duration);
+                if (finished && CMTimeGetSeconds(target) >= duration) {
+                    [self stopPlayback];
+                } else {
+                    player.rate = self.playbackSpeed;
+                    [self updatePlaybackProgress];
+                }
+            }
+        });
+    }];
+}
+
+- (void)endScrubbing {
+    self.scrubbing = NO;
+    if (!self.seeking && self.player) [self seekToRequestedPosition];
+}
+
+- (void)speedChanged:(UISlider *)slider {
+    self.playbackSpeed = roundf(slider.value * 100) / 100;
+    self.speedLabel.text = [NSString stringWithFormat:@"%.2f×", self.playbackSpeed];
+    self.speedSlider.accessibilityValue = self.speedLabel.text;
+    if (!self.scrubbing && !self.seeking) self.player.rate = self.playbackSpeed;
+}
+
+- (void)updateCameraControlsPosition {
+    CGFloat inset = 8;
+    if (self.player && self.playbackControls.superview) {
+        UIView *host = self.playbackControls.superview;
+        CGRect safeFrame = [host convertRect:host.safeAreaLayoutGuide.layoutFrame toView:self.view];
+        // 再生バー（96pt）と停止ボタンが重ならない位置へ移動する。
+        CGFloat playbackTop = CGRectGetMaxY(safeFrame) - 96;
+        inset = MAX(8, CGRectGetMaxY(self.view.safeAreaLayoutGuide.layoutFrame) - playbackTop + 8);
+    }
+    self.cameraControlsBottomConstraint.constant = -inset;
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    self.videoRecorder.previewLayer.frame = self.previewView.bounds;
+    self.drawingLayer.frame = self.previewView.bounds;
+    self.playerLayer.frame = self.playbackView.bounds;
+    [self updateCameraControlsPosition];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self stopPlayback];
+}
+
+- (void)dealloc {
+    [_playbackControls removeFromSuperview];
+    if (_playbackTimeObserver) [_player removeTimeObserver:_playbackTimeObserver];
+    if (_player) [_player.currentItem removeObserver:self forKeyPath:@"status"];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 @end

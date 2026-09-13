@@ -33,3 +33,4 @@ MTJudge 2024-11-10 12-43-51/
 
 # Swift Package Manager generated files
 .build/
+**/Index/

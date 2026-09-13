@@ -1,13 +1,10 @@
 #import <Foundation/Foundation.h>
 
 @interface FileSaver : NSObject
-
-/**
- 動画を指定されたフォルダ階層に保存します。
- 
- @param videoFileURL 撮影された動画の一時的なURL
- @param folderNames  生成するフォルダ名の配列（タグの順番）
- */
-- (void)saveVideo:(NSURL *)videoFileURL withFolderNames:(NSArray<NSString *> *)folderNames;
-
+// 初回に選択した「ダウンロード」フォルダへのアクセスを記憶する。
++ (BOOL)hasDownloadsDirectory;
++ (BOOL)rememberDownloadsDirectory:(NSURL *)directory error:(NSError **)error;
++ (void)forgetDownloadsDirectory;
+// 選択済みフォルダへ動画とカテゴリ・タグIDを保存する。成功時だけURLを返す。
+- (NSURL *)saveVideo:(NSURL *)videoFileURL selections:(NSArray<NSDictionary<NSString *, NSString *> *> *)selections error:(NSError **)error;
 @end

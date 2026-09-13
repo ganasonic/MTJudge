@@ -23,6 +23,15 @@
 // 撮影中かどうかを返すプロパティ
 @property (nonatomic, assign, readonly) BOOL isRecording;
 
+// 表示の切り替えを録画時刻とともに記録する。
+@property (atomic, assign) BOOL skeletonDrawingEnabled;
+
+// カメラの実際のズーム倍率を変更する（プレビュー・録画の両方に反映）。
+@property (nonatomic, readonly) CGFloat minimumZoomFactor;
+@property (nonatomic, readonly) CGFloat maximumZoomFactor;
+@property (nonatomic, readonly) CGFloat zoomFactor;
+- (void)setZoomFactor:(CGFloat)factor completion:(void (^)(CGFloat actualFactor, NSError *error))completion;
+
 // 撮影を開始するメソッド
 - (void)startRecording;
 

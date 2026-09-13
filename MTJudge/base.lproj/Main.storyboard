@@ -2337,71 +2337,19 @@
                                 <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                             </view>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="leading" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="7NN-n3-hok">
-                                <rect key="frame" x="20" y="729" width="70" height="42"/>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="70" id="JGv-P5-7Jp"/>
-                                    <constraint firstAttribute="height" constant="42" id="gBf-DN-3lr"/>
-                                </constraints>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="plain" title="Tag">
-                                    <fontDescription key="titleFontDescription" style="UICTFontTextStyleTitle2"/>
-                                    <color key="baseForegroundColor" systemColor="systemYellowColor"/>
-                                </buttonConfiguration>
-                                <connections>
-                                    <action selector="manageTagsButtonTapped:" destination="1Tx-9o-gWG" eventType="touchUpInside" id="OKn-5L-6Va"/>
-                                </connections>
-                            </button>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="trailing" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="R4x-aE-kpF">
-                                <rect key="frame" x="282" y="689" width="100" height="20"/>
-                                <constraints>
-                                    <constraint firstAttribute="height" constant="20" id="cqo-5C-2Vs"/>
-                                    <constraint firstAttribute="width" constant="100" id="kO4-xN-WEc"/>
-                                </constraints>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="plain" title="Frame" titleAlignment="trailing">
-                                    <fontDescription key="titleFontDescription" style="UICTFontTextStyleHeadline"/>
-                                    <color key="baseForegroundColor" systemColor="systemGreenColor"/>
-                                </buttonConfiguration>
-                                <connections>
-                                    <action selector="toggleSkeletonDrawing:" destination="1Tx-9o-gWG" eventType="touchUpInside" id="fYT-tD-iP1"/>
-                                </connections>
-                            </button>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="trailing" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="gXd-3F-zrp">
-                                <rect key="frame" x="312" y="729" width="70" height="42"/>
-                                <constraints>
-                                    <constraint firstAttribute="height" constant="42" id="R8F-XP-oOs"/>
-                                    <constraint firstAttribute="width" constant="70" id="nGz-ZF-s7k"/>
-                                </constraints>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="plain" title="Rec">
-                                    <fontDescription key="titleFontDescription" style="UICTFontTextStyleTitle2"/>
-                                    <color key="baseForegroundColor" red="1" green="0.03363492455" blue="0.01211270769" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                </buttonConfiguration>
-                                <connections>
-                                    <action selector="recordButtonTapped:" destination="1Tx-9o-gWG" eventType="touchUpInside" id="qYK-fD-1VS"/>
-                                </connections>
-                            </button>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="DlF-IH-CAp"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                         <constraints>
-                            <constraint firstItem="DlF-IH-CAp" firstAttribute="bottom" secondItem="7NN-n3-hok" secondAttribute="bottom" constant="20" id="KmR-wv-MBN"/>
-                            <constraint firstItem="DlF-IH-CAp" firstAttribute="bottom" secondItem="gXd-3F-zrp" secondAttribute="bottom" constant="20" id="N6g-Fj-IJh"/>
-                            <constraint firstItem="7NN-n3-hok" firstAttribute="leading" secondItem="djS-nD-rN3" secondAttribute="leading" constant="20" id="Pr9-Ah-MJB"/>
                             <constraint firstItem="9Bc-mH-7f2" firstAttribute="trailing" secondItem="DlF-IH-CAp" secondAttribute="trailing" id="c1s-6n-gy2"/>
-                            <constraint firstItem="gXd-3F-zrp" firstAttribute="top" secondItem="R4x-aE-kpF" secondAttribute="bottom" constant="20" id="enu-D0-IGi"/>
-                            <constraint firstItem="DlF-IH-CAp" firstAttribute="trailing" secondItem="R4x-aE-kpF" secondAttribute="trailing" constant="20" id="gtz-Ji-Q8d"/>
                             <constraint firstItem="9Bc-mH-7f2" firstAttribute="top" secondItem="djS-nD-rN3" secondAttribute="top" id="nK1-x3-OZS"/>
                             <constraint firstItem="9Bc-mH-7f2" firstAttribute="leading" secondItem="DlF-IH-CAp" secondAttribute="leading" id="oRq-cA-5VF"/>
                             <constraint firstAttribute="bottom" secondItem="9Bc-mH-7f2" secondAttribute="bottom" id="yK2-ng-CxC"/>
-                            <constraint firstItem="DlF-IH-CAp" firstAttribute="trailing" secondItem="gXd-3F-zrp" secondAttribute="trailing" constant="20" id="yxH-7g-qQZ"/>
                         </constraints>
                     </view>
                     <tabBarItem key="tabBarItem" title="Camera" id="4kf-om-lTy"/>
                     <connections>
                         <outlet property="previewView" destination="9Bc-mH-7f2" id="gMN-dp-cyo"/>
-                        <outlet property="recordButton" destination="gXd-3F-zrp" id="nwy-lj-nlp"/>
                     </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="zTp-yX-rSw" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>

@@ -1,19 +1,26 @@
 #import "VideoRecorder.h"
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
+#import <CoreImage/CoreImage.h>
+#import "SkeletonConnections.h"
 
 // プライベートプロパティをここで宣言
 @interface VideoRecorder () <AVCaptureFileOutputRecordingDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (nonatomic, strong) AVCaptureSession *captureSession;
+@property (atomic, strong) AVCaptureDevice *cameraDevice;
+@property (nonatomic, strong) dispatch_queue_t zoomQueue;
 @property (nonatomic, strong) AVCaptureMovieFileOutput *movieFileOutput;
 @property (nonatomic, strong) AVCaptureVideoDataOutput *videoDataOutput;
 @property (nonatomic, strong) AVCaptureVideoPreviewLayer *previewLayer;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *skeletonChanges;
+@property (nonatomic, strong) AVAssetExportSession *skeletonExport;
 @property (nonatomic, assign) BOOL isRecording; // isRecordingを読み書き可能に
 
 @end
 
 @implementation VideoRecorder
+@synthesize skeletonDrawingEnabled = _skeletonDrawingEnabled;
 
 // 初期化メソッド
 - (instancetype)init {
@@ -24,6 +31,7 @@
         // AVCaptureSession: ビデオやオーディオのキャプチャ（取得）タスクを管理する中核的なオブジェクト
         // カメラからの映像入力、マイクからの音声入力、そしてそれらの出力を結びつける役割を担う
         _captureSession = [[AVCaptureSession alloc] init];
+        _zoomQueue = dispatch_queue_create("com.MTJudge.cameraZoom", DISPATCH_QUEUE_SERIAL);
         // AVCaptureMovieFileOutput: ビデオとオーディオのデータをファイルに録画するための出力オブジェクト
         _movieFileOutput = [[AVCaptureMovieFileOutput alloc] init];
         _isRecording = NO;
@@ -127,8 +135,37 @@
     [_captureSession commitConfiguration];// 冒頭の beginConfiguration に対応
     // 設定が確定されたキャプチャセッションを開始
     [self.captureSession startRunning];
+    self.cameraDevice = videoInput ? videoDevice : nil;
 
     NSLog(@"Camera setup complete. Session running: %d", self.captureSession.isRunning);
+}
+
+#pragma mark - Camera Zoom
+
+- (CGFloat)minimumZoomFactor {
+    return self.cameraDevice ? self.cameraDevice.minAvailableVideoZoomFactor : 1;
+}
+- (CGFloat)maximumZoomFactor {
+    AVCaptureDevice *device = self.cameraDevice;
+    return device ? MIN(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor) : 1;
+}
+- (CGFloat)zoomFactor {
+    return self.cameraDevice ? self.cameraDevice.videoZoomFactor : 1;
+}
+- (void)setZoomFactor:(CGFloat)factor completion:(void (^)(CGFloat, NSError *))completion {
+    dispatch_async(self.zoomQueue, ^{
+        AVCaptureDevice *device = self.cameraDevice;
+        NSError *error = nil;
+        if (device && isfinite(factor) && [device lockForConfiguration:&error]) {
+            CGFloat minimum = device.minAvailableVideoZoomFactor;
+            CGFloat maximum = MIN(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor);
+            [device cancelVideoZoomRamp];
+            device.videoZoomFactor = MIN(maximum, MAX(minimum, factor));
+            [device unlockForConfiguration];
+        }
+        CGFloat actual = device ? device.videoZoomFactor : 1;
+        dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(actual, error); });
+    });
 }
 
 #pragma mark - Recording Control
@@ -136,7 +173,10 @@
 // 録画の開始
 - (void)startRecording {
     NSLog(@"startRecording @VideoRecorder");
-    _isRecording = YES;
+    @synchronized (self) {
+        _isRecording = YES;
+        self.skeletonChanges = [NSMutableArray arrayWithObject:@{@"time": @0, @"enabled": @(_skeletonDrawingEnabled)}];
+    }
     
     // 録画の設定
     AVCaptureConnection *movieConnection = [_movieFileOutput connectionWithMediaType:AVMediaTypeVideo];
@@ -184,15 +224,117 @@
 
 // 録画が完了したときに呼ばれるデリゲートメソッド
 - (void)captureOutput:(AVCaptureFileOutput *)output didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL fromConnections:(NSArray *)connections error:(NSError *)error {
-    NSLog(@"didFinishRecordingToOutputFileAtURL @VideoRecorder");
-    if (error) {
-        NSLog(@"Video recording error: %@", error.localizedDescription);
+    _isRecording = NO;
+    BOOL successful = !error || [error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] boolValue];
+    if (!successful) {
+        [self notifyRecordingFinished:outputFileURL error:error];
+        return;
     }
-    
-    // 録画完了をデリゲートに通知
-    if ([self.delegate respondsToSelector:@selector(videoRecorder:didFinishRecordingToOutputFileURL:error:)]) {
-        [self.delegate videoRecorder:self didFinishRecordingToOutputFileURL:outputFileURL error:error];
+    NSArray<NSDictionary *> *changes;
+    @synchronized (self) { changes = [self.skeletonChanges copy]; }
+    BOOL needsSkeleton = NO;
+    for (NSDictionary *change in changes) needsSkeleton |= [change[@"enabled"] boolValue];
+    if (!needsSkeleton) {
+        [self notifyRecordingFinished:outputFileURL error:nil];
+        return;
     }
+    [self exportSkeletonInVideo:outputFileURL changes:changes];
+}
+
+- (BOOL)skeletonDrawingEnabled {
+    @synchronized (self) { return _skeletonDrawingEnabled; }
+}
+
+- (void)setSkeletonDrawingEnabled:(BOOL)enabled {
+    @synchronized (self) {
+        _skeletonDrawingEnabled = enabled;
+        if (_isRecording) {
+            double seconds = CMTimeGetSeconds(self.movieFileOutput.recordedDuration);
+            if (!isfinite(seconds) || seconds < 0) seconds = 0;
+            [self.skeletonChanges addObject:@{@"time": @(seconds), @"enabled": @(enabled)}];
+        }
+    }
+}
+
+- (void)notifyRecordingFinished:(NSURL *)url error:(NSError *)error {
+    [self.delegate videoRecorder:self didFinishRecordingToOutputFileURL:url error:error];
+}
+
+// 元の音声を保持し、表示が有効だった区間の映像に骨格線を焼き込む。
+- (void)exportSkeletonInVideo:(NSURL *)sourceURL changes:(NSArray<NSDictionary *> *)changes {
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:sourceURL options:nil];
+    AVVideoComposition *composition = [AVVideoComposition videoCompositionWithAsset:asset applyingCIFiltersWithHandler:^(AVAsynchronousCIImageFilteringRequest *request) {
+        @autoreleasepool {
+            double time = CMTimeGetSeconds(request.compositionTime);
+            BOOL enabled = NO;
+            for (NSDictionary *change in changes) {
+                if ([change[@"time"] doubleValue] > time) break;
+                enabled = [change[@"enabled"] boolValue];
+            }
+            CIImage *source = request.sourceImage;
+            if (!enabled) {
+                [request finishWithImage:source context:nil];
+                return;
+            }
+            CGRect extent = source.extent;
+            CIImage *image = [source imageByApplyingTransform:CGAffineTransformMakeTranslation(-extent.origin.x, -extent.origin.y)];
+            VNDetectHumanBodyPoseRequest *pose = [[VNDetectHumanBodyPoseRequest alloc] init];
+            VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCIImage:image options:@{}];
+            NSError *error = nil;
+            if (![handler performRequests:@[pose] error:&error]) {
+                [request finishWithError:error];
+                return;
+            }
+            size_t width = (size_t)CGRectGetWidth(extent);
+            size_t height = (size_t)CGRectGetHeight(extent);
+            CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+            CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast);
+            CGColorSpaceRelease(space);
+            if (!context) {
+                [request finishWithError:[NSError errorWithDomain:@"MTJudge.Skeleton" code:1 userInfo:@{NSLocalizedDescriptionKey: @"骨格線の描画に必要なメモリを確保できませんでした。"}]];
+                return;
+            }
+            CGContextSetRGBStrokeColor(context, 0, 1, 0, 1);
+            CGContextSetLineWidth(context, MAX(3, width / 180.0));
+            CGContextSetLineCap(context, kCGLineCapRound);
+            for (VNHumanBodyPoseObservation *observation in pose.results) {
+                for (NSArray<NSString *> *connection in SkeletonConnections()) {
+                    VNRecognizedPoint *start = [observation recognizedPointForJointName:connection.firstObject error:NULL];
+                    VNRecognizedPoint *end = [observation recognizedPointForJointName:connection.lastObject error:NULL];
+                    if (start.confidence > 0.1 && end.confidence > 0.1) {
+                        CGContextMoveToPoint(context, start.location.x * width, start.location.y * height);
+                        CGContextAddLineToPoint(context, end.location.x * width, end.location.y * height);
+                    }
+                }
+            }
+            CGContextStrokePath(context);
+            CGImageRef overlayImage = CGBitmapContextCreateImage(context);
+            CGContextRelease(context);
+            CIImage *overlay = [[CIImage imageWithCGImage:overlayImage] imageByApplyingTransform:CGAffineTransformMakeTranslation(extent.origin.x, extent.origin.y)];
+            CGImageRelease(overlayImage);
+            [request finishWithImage:[[overlay imageByCompositingOverImage:source] imageByCroppingToRect:extent] context:nil];
+        }
+    }];
+    NSURL *destination = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"mov"]]];
+    self.skeletonExport = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetHighestQuality];
+    if (!self.skeletonExport) {
+        [self notifyRecordingFinished:sourceURL error:[NSError errorWithDomain:@"MTJudge.Skeleton" code:2 userInfo:@{NSLocalizedDescriptionKey: @"骨格付き動画の作成を開始できませんでした。"}]];
+        return;
+    }
+    self.skeletonExport.outputURL = destination;
+    self.skeletonExport.outputFileType = AVFileTypeQuickTimeMovie;
+    self.skeletonExport.videoComposition = composition;
+    AVAssetExportSession *export = self.skeletonExport;
+    [export exportAsynchronouslyWithCompletionHandler:^{
+        if (export.status == AVAssetExportSessionStatusCompleted) {
+            [[NSFileManager defaultManager] removeItemAtURL:sourceURL error:NULL];
+            [self notifyRecordingFinished:destination error:nil];
+        } else {
+            NSError *error = export.error ?: [NSError errorWithDomain:@"MTJudge.Skeleton" code:3 userInfo:@{NSLocalizedDescriptionKey: @"骨格付き動画を作成できませんでした。"}];
+            [self notifyRecordingFinished:sourceURL error:error];
+        }
+        self.skeletonExport = nil;
+    }];
 }
 
 #pragma mark - AVCaptureVideoDataOutputSampleBufferDelegate

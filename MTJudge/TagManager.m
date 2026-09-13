@@ -59,10 +59,12 @@
 
 // タグデータをファイルに保存
 - (void)saveTags {
-    NSError *error;
-    NSData *archivedData = [NSKeyedArchiver archivedDataWithRootObject:self.tags requiringSecureCoding:NO error:&error];
+    NSError *error = nil;
+    NSData *archivedData = [NSKeyedArchiver archivedDataWithRootObject:self.tags requiringSecureCoding:YES error:&error];
     if (archivedData) {
-        [archivedData writeToFile:[self tagsFilePath] atomically:YES];
+        if (![archivedData writeToFile:[self tagsFilePath] options:NSDataWritingAtomic error:&error]) {
+            NSLog(@"Failed to write tags: %@", error.localizedDescription);
+        }
     } else {
         NSLog(@"Failed to archive tags: %@", error.localizedDescription);
     }
@@ -74,7 +76,7 @@
     if ([[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
         NSData *archivedData = [NSData dataWithContentsOfFile:filePath];
         if (archivedData) {
-            NSSet *classes = [NSSet setWithObjects:[NSMutableArray class], [Tag class], [TagItem class], nil];
+            NSSet *classes = [NSSet setWithObjects:[NSArray class], [NSMutableArray class], [NSString class], [Tag class], [TagItem class], nil];
             NSError *error = nil;
             NSArray *loadedTags = [NSKeyedUnarchiver unarchivedObjectOfClasses:classes fromData:archivedData error:&error];
             if (loadedTags) {

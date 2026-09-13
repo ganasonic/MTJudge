@@ -21,7 +21,7 @@
     self = [super init];
     if (self) {
         _tagName = [coder decodeObjectOfClass:[NSString class] forKey:@"tagName"];
-        _tagItems = [coder decodeObjectOfClasses:[NSSet setWithObjects:[NSMutableArray class], [TagItem class], nil] forKey:@"tagItems"];
+        _tagItems = [[coder decodeObjectOfClasses:[NSSet setWithObjects:[NSArray class], [NSMutableArray class], [TagItem class], nil] forKey:@"tagItems"] mutableCopy] ?: [NSMutableArray array];
         _isDefault = [coder decodeBoolForKey:@"isDefault"];
         _defaultTagItemId = [coder decodeObjectOfClass:[NSString class] forKey:@"defaultTagItemId"];
     }
