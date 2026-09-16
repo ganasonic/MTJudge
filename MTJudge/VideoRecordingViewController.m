@@ -49,6 +49,13 @@
 @property (nonatomic, strong) UIButton *playButton;
 @property (nonatomic, strong) UIButton *skeletonButton;
 @property (nonatomic, strong) UIButton *tagButton;
+@property (nonatomic, strong) UIButton *deleteButton;
+@property (nonatomic, strong) UIStackView *zoomPresetsRow;
+@property (nonatomic, copy) NSArray<NSNumber *> *displayedZoomPresets;
+@property (nonatomic, strong) UIButton *guideButton;
+@property (nonatomic, strong) UIView *guideView;
+@property (nonatomic, strong) CAShapeLayer *guideLayer;
+@property (nonatomic, assign) BOOL guideEnabled;
 @property (nonatomic, strong) UIButton *saveButton;
 @property (nonatomic, strong) UIActivityIndicatorView *recordingActivity;
 @property (nonatomic, strong) UIVisualEffectView *zoomControls;
@@ -509,8 +516,8 @@
     button.tintColor = UIColor.whiteColor;
     [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    [button.heightAnchor constraintEqualToConstant:48].active = YES;
-    NSLayoutConstraint *width = [button.widthAnchor constraintEqualToConstant:48];
+    [button.heightAnchor constraintEqualToConstant:44].active = YES;
+    NSLayoutConstraint *width = [button.widthAnchor constraintEqualToConstant:44];
     width.priority = 999; // 非表示の保存ボタンはスタック内で折りたたむ。
     width.active = YES;
     return button;
@@ -527,6 +534,22 @@
 }
 
 - (void)setupCameraControls {
+    self.guideView = [[UIView alloc] init];
+    self.guideView.userInteractionEnabled = NO;
+    self.guideView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.guideView.hidden = YES;
+    [self.view addSubview:self.guideView];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.guideView.leadingAnchor constraintEqualToAnchor:self.previewView.leadingAnchor],
+        [self.guideView.trailingAnchor constraintEqualToAnchor:self.previewView.trailingAnchor],
+        [self.guideView.topAnchor constraintEqualToAnchor:self.previewView.topAnchor],
+        [self.guideView.bottomAnchor constraintEqualToAnchor:self.previewView.bottomAnchor]
+    ]];
+    self.guideLayer = [CAShapeLayer layer];
+    self.guideLayer.strokeColor = [UIColor colorWithWhite:1 alpha:0.45].CGColor;
+    self.guideLayer.fillColor = UIColor.clearColor.CGColor;
+    self.guideLayer.lineWidth = 1.5;
+    [self.guideView.layer addSublayer:self.guideLayer];
     self.playbackView = [[UIView alloc] init];
     self.playbackView.backgroundColor = UIColor.blackColor;
     self.playbackView.hidden = YES;
@@ -536,7 +559,7 @@
     [self.previewView addSubview:self.playbackView];
 
     UIVisualEffectView *panel = [[UIVisualEffectView alloc] initWithEffect:nil];
-    panel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+    panel.backgroundColor = UIColor.clearColor;
     panel.translatesAutoresizingMaskIntoConstraints = NO;
     panel.layer.cornerRadius = 24;
     panel.clipsToBounds = YES;
@@ -553,10 +576,12 @@
     self.playButton = [self cameraButtonWithAction:@selector(togglePlayback:)];
     self.skeletonButton = [self cameraButtonWithAction:@selector(toggleSkeletonDrawing:)];
     self.tagButton = [self cameraButtonWithAction:@selector(manageTagsButtonTapped:)];
+    self.guideButton = [self cameraButtonWithAction:@selector(toggleGuide:)];
+    self.deleteButton = [self cameraButtonWithAction:@selector(deleteLatestRecording:)];
     self.saveButton = [self cameraButtonWithAction:@selector(presentRecordingSavePicker)];
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.recordButton, self.playButton, self.skeletonButton, self.tagButton, self.saveButton]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.recordButton, self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.deleteButton, self.saveButton]];
     stack.axis = UILayoutConstraintAxisHorizontal;
-    stack.spacing = 8;
+    stack.spacing = 4;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [panel.contentView addSubview:stack];
     self.cameraControlsBottomConstraint = [panel.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8];
@@ -584,8 +609,14 @@
     self.playButton.enabled = self.latestRecordingURL != nil && !recording && !self.finishingRecording;
     self.skeletonButton.enabled = !playing;
     self.tagButton.enabled = !recording && !playing && !self.finishingRecording;
+    self.deleteButton.hidden = self.latestRecordingURL == nil;
+    self.deleteButton.enabled = !recording && !self.finishingRecording;
+    [self styleButton:self.deleteButton title:@"再生用動画を削除" symbol:@"trash" color:UIColor.systemRedColor];
     self.saveButton.hidden = !self.pendingRecordingURL;
     self.saveButton.enabled = !playing;
+    self.guideButton.hidden = self.pendingRecordingURL != nil;
+    self.guideButton.enabled = !playing;
+    self.guideView.hidden = !self.guideEnabled || playing;
     UIColor *neutral = [UIColor colorWithWhite:0.22 alpha:0.95];
     [self styleButton:self.recordButton title:recording ? @"録画停止" : @"録画開始" symbol:recording ? @"stop.fill" : @"record.circle" color:UIColor.systemRedColor];
     if (self.finishingRecording) {
@@ -599,7 +630,53 @@
     [self styleButton:self.skeletonButton title:self.isSkeletonDrawingEnabled ? @"骨格を非表示" : @"骨格を表示" symbol:@"figure.walk" color:self.isSkeletonDrawingEnabled ? [UIColor colorWithRed:0.08 green:0.45 blue:0.28 alpha:1] : neutral];
     self.skeletonButton.accessibilityValue = self.isSkeletonDrawingEnabled ? @"表示中" : @"非表示";
     [self styleButton:self.tagButton title:@"タグ設定" symbol:@"tag.fill" color:neutral];
+    [self styleButton:self.guideButton title:self.guideEnabled ? @"十字ガイドを非表示" : @"十字ガイドを表示" symbol:@"scope" color:self.guideEnabled ? UIColor.systemBlueColor : neutral];
+    self.guideButton.accessibilityValue = self.guideEnabled ? @"表示中" : @"非表示";
     [self styleButton:self.saveButton title:@"保存先を選択" symbol:@"square.and.arrow.down" color:neutral];
+}
+
+- (void)deleteLatestRecording:(id)sender {
+    if (!self.latestRecordingURL || self.videoRecorder.isRecording || self.finishingRecording) return;
+    NSURL *url = self.latestRecordingURL;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"再生用動画を削除しますか？" message:self.pendingRecordingURL ? @"未保存の動画を削除します。この操作は取り消せません。" : @"アプリ内の再生用動画を削除します。ダウンロードに保存済みの動画は残ります。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [self stopPlayback];
+        NSError *error = nil;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:url.path] && ![[NSFileManager defaultManager] removeItemAtURL:url error:&error]) {
+            UIAlertController *failure = [UIAlertController alertControllerWithTitle:@"削除できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            [failure addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:failure animated:YES completion:nil];
+            return;
+        }
+        [[NSFileManager defaultManager] removeItemAtPath:[url.path stringByAppendingString:@".tags.json"] error:nil];
+        self.latestRecordingURL = nil;
+        if ([self.pendingRecordingURL isEqual:url]) self.pendingRecordingURL = nil;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingPath"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+        [self updateCameraControls];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)toggleGuide:(id)sender {
+    self.guideEnabled = !self.guideEnabled;
+    [self updateGuideGeometry];
+    [self updateCameraControls];
+}
+
+- (void)updateGuideGeometry {
+    CGRect bounds = self.guideView.bounds;
+    UIBezierPath *path = [UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(CGRectGetMidX(bounds), CGRectGetMinY(bounds))];
+    [path addLineToPoint:CGPointMake(CGRectGetMidX(bounds), CGRectGetMaxY(bounds))];
+    [path moveToPoint:CGPointMake(CGRectGetMinX(bounds), CGRectGetMidY(bounds))];
+    [path addLineToPoint:CGPointMake(CGRectGetMaxX(bounds), CGRectGetMidY(bounds))];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.guideLayer.frame = bounds;
+    self.guideLayer.path = path.CGPath;
+    [CATransaction commit];
 }
 
 - (void)setupZoomControls {
@@ -636,7 +713,7 @@
     row.translatesAutoresizingMaskIntoConstraints = NO;
     [self.zoomControls.contentView addSubview:row];
     [NSLayoutConstraint activateConstraints:@[
-        [self.zoomControls.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.zoomControls.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:56],
         [self.zoomControls.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
         [row.topAnchor constraintEqualToAnchor:self.zoomControls.contentView.topAnchor],
         [row.bottomAnchor constraintEqualToAnchor:self.zoomControls.contentView.bottomAnchor],
@@ -646,11 +723,47 @@
     [self updateZoomControls];
 }
 
+- (void)selectZoomPreset:(UIButton *)sender {
+    [self changeCameraZoom:sender.tag / 10.0];
+}
+
 - (void)updateZoomControls {
     BOOL available = !self.player && !self.finishingRecording && !self.pendingRecordingURL;
     CGFloat minimum = self.videoRecorder.minimumZoomFactor;
     CGFloat maximum = self.videoRecorder.maximumZoomFactor;
     self.zoomControls.hidden = !available;
+    NSArray<NSNumber *> *presets = self.videoRecorder.zoomPresets;
+    if (![self.displayedZoomPresets isEqual:presets]) {
+        self.displayedZoomPresets = presets;
+        [self.zoomPresetsRow removeFromSuperview];
+        self.zoomPresetsRow = [[UIStackView alloc] init];
+        self.zoomPresetsRow.spacing = 4;
+        self.zoomPresetsRow.translatesAutoresizingMaskIntoConstraints = NO;
+        for (NSNumber *value in presets) {
+            UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+            button.tag = lround(value.doubleValue * 10);
+            [button setTitle:[NSString stringWithFormat:@"%g", value.doubleValue] forState:UIControlStateNormal];
+            button.accessibilityLabel = [NSString stringWithFormat:@"%g倍にズーム", value.doubleValue];
+            [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+            button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+            button.layer.cornerRadius = 20;
+            [button.widthAnchor constraintEqualToConstant:40].active = YES;
+            [button.heightAnchor constraintEqualToConstant:40].active = YES;
+            [button addTarget:self action:@selector(selectZoomPreset:) forControlEvents:UIControlEventTouchUpInside];
+            [self.zoomPresetsRow addArrangedSubview:button];
+        }
+        [self.view addSubview:self.zoomPresetsRow];
+        [NSLayoutConstraint activateConstraints:@[
+            [self.zoomPresetsRow.bottomAnchor constraintEqualToAnchor:self.zoomControls.topAnchor constant:-4],
+            [self.zoomPresetsRow.trailingAnchor constraintEqualToAnchor:self.zoomControls.trailingAnchor]
+        ]];
+    }
+    self.zoomPresetsRow.hidden = !available;
+    for (UIButton *button in self.zoomPresetsRow.arrangedSubviews) {
+        button.selected = fabs(self.requestedZoom - button.tag / 10.0) < 0.05;
+        button.backgroundColor = button.selected ? [UIColor.systemBlueColor colorWithAlphaComponent:0.3] : [UIColor colorWithWhite:0 alpha:0.12];
+        button.accessibilityValue = button.selected ? @"選択中" : nil;
+    }
     self.zoomPinch.enabled = available && maximum > minimum;
     self.zoomOutButton.enabled = available && self.requestedZoom > minimum + 0.01;
     self.zoomInButton.enabled = available && self.requestedZoom < maximum - 0.01;
@@ -910,6 +1023,7 @@
     self.videoRecorder.previewLayer.frame = self.previewView.bounds;
     self.drawingLayer.frame = self.previewView.bounds;
     self.playerLayer.frame = self.playbackView.bounds;
+    [self updateGuideGeometry];
     [self updateCameraControlsPosition];
 }
 

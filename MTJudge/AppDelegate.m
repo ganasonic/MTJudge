@@ -8,6 +8,31 @@
 
 #import "AppDelegate.h"
 
+// Storyboard screens designed with a 20-point status-bar inset retain their
+// relative layout, while moving below larger camera/sensor safe areas.
+@interface LegacySafeAreaView : UIView
+@property (nonatomic) CGFloat appliedTopOffset;
+@end
+
+@implementation LegacySafeAreaView
+- (void)safeAreaInsetsDidChange {
+    [super safeAreaInsetsDidChange];
+    [self setNeedsLayout];
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat offset = MAX(0, self.safeAreaInsets.top - 20.0);
+    CGFloat delta = offset - self.appliedTopOffset;
+    if (fabs(delta) < 0.01) return;
+    for (UIView *subview in self.subviews) {
+        CGRect frame = subview.frame;
+        frame.origin.y += delta;
+        subview.frame = frame;
+    }
+    self.appliedTopOffset = offset;
+}
+@end
+
 @interface AppDelegate ()
 
 @end

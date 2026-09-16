@@ -30,6 +30,7 @@
 @property (nonatomic, readonly) CGFloat minimumZoomFactor;
 @property (nonatomic, readonly) CGFloat maximumZoomFactor;
 @property (nonatomic, readonly) CGFloat zoomFactor;
+@property (nonatomic, readonly) NSArray<NSNumber *> *zoomPresets;
 - (void)setZoomFactor:(CGFloat)factor completion:(void (^)(CGFloat actualFactor, NSError *error))completion;
 
 // 撮影を開始するメソッド

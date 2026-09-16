@@ -58,7 +58,14 @@
     // カメラとマイクのデバイスを取得し、セッションに追加
 
     // defaultDeviceWithMediaType: は、指定されたメディアタイプ（ここではAVMediaTypeVideo、つまりビデオ）に対応するデフォルトのキャプチャデバイスを取得
-    AVCaptureDevice *videoDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    AVCaptureDevice *videoDevice = nil;
+    if (@available(iOS 13.0, *)) {
+        for (AVCaptureDeviceType type in @[AVCaptureDeviceTypeBuiltInTripleCamera, AVCaptureDeviceTypeBuiltInDualWideCamera, AVCaptureDeviceTypeBuiltInDualCamera]) {
+            videoDevice = [AVCaptureDevice defaultDeviceWithDeviceType:type mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionBack];
+            if (videoDevice) break;
+        }
+    }
+    if (!videoDevice) videoDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     // 取得したvideoDevice（背面カメラ）を使って、新しいビデオ入力オブジェクトを作成している
     AVCaptureDeviceInput *videoInput = [AVCaptureDeviceInput deviceInputWithDevice:videoDevice error:nil];
     // セッションにビデオ入力を追加
@@ -136,21 +143,49 @@
     // 設定が確定されたキャプチャセッションを開始
     [self.captureSession startRunning];
     self.cameraDevice = videoInput ? videoDevice : nil;
+    if ([videoDevice lockForConfiguration:nil]) {
+        videoDevice.videoZoomFactor = MIN(videoDevice.maxAvailableVideoZoomFactor, MAX(videoDevice.minAvailableVideoZoomFactor, 1.0 / [self zoomDisplayMultiplier]));
+        [videoDevice unlockForConfiguration];
+    }
 
     NSLog(@"Camera setup complete. Session running: %d", self.captureSession.isRunning);
 }
 
 #pragma mark - Camera Zoom
 
+- (CGFloat)zoomDisplayMultiplier {
+    if (@available(iOS 18.0, *)) return self.cameraDevice ? self.cameraDevice.displayVideoZoomFactorMultiplier : 1;
+    if (@available(iOS 13.0, *)) {
+        if ([self.cameraDevice.deviceType isEqual:AVCaptureDeviceTypeBuiltInTripleCamera] || [self.cameraDevice.deviceType isEqual:AVCaptureDeviceTypeBuiltInDualWideCamera])
+            return 1.0 / self.cameraDevice.virtualDeviceSwitchOverVideoZoomFactors.firstObject.doubleValue;
+    }
+    return 1;
+}
+
+- (NSArray<NSNumber *> *)zoomPresets {
+    AVCaptureDevice *device = self.cameraDevice;
+    if (!device) return @[];
+    CGFloat multiplier = [self zoomDisplayMultiplier];
+    NSMutableArray<NSNumber *> *raw = [NSMutableArray arrayWithObject:@(1.0 / multiplier)];
+    if (@available(iOS 13.0, *)) [raw addObjectsFromArray:device.virtualDeviceSwitchOverVideoZoomFactors];
+    if (@available(iOS 16.0, *)) [raw addObjectsFromArray:device.activeFormat.secondaryNativeResolutionZoomFactors];
+    NSMutableSet<NSNumber *> *values = [NSMutableSet set];
+    for (NSNumber *factor in raw) {
+        CGFloat value = round(factor.doubleValue * multiplier * 10) / 10;
+        if (value >= 1 && value <= self.maximumZoomFactor && value >= self.minimumZoomFactor) [values addObject:@(value)];
+    }
+    return [[values allObjects] sortedArrayUsingSelector:@selector(compare:)];
+}
+
 - (CGFloat)minimumZoomFactor {
-    return self.cameraDevice ? self.cameraDevice.minAvailableVideoZoomFactor : 1;
+    return self.cameraDevice ? self.cameraDevice.minAvailableVideoZoomFactor * [self zoomDisplayMultiplier] : 1;
 }
 - (CGFloat)maximumZoomFactor {
     AVCaptureDevice *device = self.cameraDevice;
-    return device ? MIN(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor) : 1;
+    return device ? MIN(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor) * [self zoomDisplayMultiplier] : 1;
 }
 - (CGFloat)zoomFactor {
-    return self.cameraDevice ? self.cameraDevice.videoZoomFactor : 1;
+    return self.cameraDevice ? self.cameraDevice.videoZoomFactor * [self zoomDisplayMultiplier] : 1;
 }
 - (void)setZoomFactor:(CGFloat)factor completion:(void (^)(CGFloat, NSError *))completion {
     dispatch_async(self.zoomQueue, ^{
@@ -160,10 +195,10 @@
             CGFloat minimum = device.minAvailableVideoZoomFactor;
             CGFloat maximum = MIN(device.maxAvailableVideoZoomFactor, device.activeFormat.videoMaxZoomFactor);
             [device cancelVideoZoomRamp];
-            device.videoZoomFactor = MIN(maximum, MAX(minimum, factor));
+            device.videoZoomFactor = MIN(maximum, MAX(minimum, factor / [self zoomDisplayMultiplier]));
             [device unlockForConfiguration];
         }
-        CGFloat actual = device ? device.videoZoomFactor : 1;
+        CGFloat actual = device ? device.videoZoomFactor * [self zoomDisplayMultiplier] : 1;
         dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(actual, error); });
     });
 }

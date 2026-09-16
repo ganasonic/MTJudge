@@ -14,7 +14,7 @@
         <scene sceneID="hNz-n2-bh7">
             <objects>
                 <viewController id="9pv-A4-QxB" customClass="FirstViewController" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="tsR-hK-woN">
+                    <view key="view" contentMode="scaleToFill" id="tsR-hK-woN" customClass="LegacySafeAreaView">
                         <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
@@ -708,7 +708,7 @@
         <scene sceneID="X2j-gi-Eqi">
             <objects>
                 <viewController id="Ejn-Hn-CCw" customClass="SpeedViewController" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="2Y4-8J-9Jk">
+                    <view key="view" contentMode="scaleToFill" id="2Y4-8J-9Jk" customClass="LegacySafeAreaView">
                         <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
@@ -1183,7 +1183,7 @@
         <scene sceneID="4v0-uL-fJ5">
             <objects>
                 <viewController id="PZU-4K-Rbo" customClass="ResultViewController" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="9AW-hM-L6I">
+                    <view key="view" contentMode="scaleToFill" id="9AW-hM-L6I" customClass="LegacySafeAreaView">
                         <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
@@ -1388,7 +1388,7 @@
         <scene sceneID="WZG-qS-B8f">
             <objects>
                 <viewController id="Kqn-Jc-pei" customClass="ReductionViewControler" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="BA3-9n-zE8">
+                    <view key="view" contentMode="scaleToFill" id="BA3-9n-zE8" customClass="LegacySafeAreaView">
                         <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
@@ -1544,7 +1544,7 @@
         <scene sceneID="gb2-xy-W1a">
             <objects>
                 <viewController id="4bs-Fl-DaG" customClass="AirViewController" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="A8E-JM-cnW">
+                    <view key="view" contentMode="scaleToFill" id="A8E-JM-cnW" customClass="LegacySafeAreaView">
                         <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
@@ -1934,7 +1934,7 @@
         <scene sceneID="gQ6-4d-gfy">
             <objects>
                 <viewController id="Ral-Cr-wAN" userLabel="DM" customClass="DMViewController" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="2YQ-qO-8ex">
+                    <view key="view" contentMode="scaleToFill" id="2YQ-qO-8ex" customClass="LegacySafeAreaView">
                         <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
