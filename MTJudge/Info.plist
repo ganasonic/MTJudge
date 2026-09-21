@@ -61,8 +61,14 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string></string>
+	<string>練習動画の撮影と骨格表示にカメラを使用します。</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string></string>
+	<string>練習動画の音声を録音します。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>同じWi-Fiのリモコン端末やiPadと接続し、録画操作と練習動画の自動転送を行います。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_mtjudge-wj._tcp</string>
+	</array>
 </dict>
 </plist>

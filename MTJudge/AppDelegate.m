@@ -7,6 +7,7 @@
 //
 
 #import "AppDelegate.h"
+#import "WaterJump/WaterJumpCoordinator.h"
 
 // Storyboard screens designed with a 20-point status-bar inset retain their
 // relative layout, while moving below larger camera/sensor safe areas.
@@ -64,6 +65,7 @@
     
     self.window.rootViewController = tabBarController;
     [self.window makeKeyAndVisible];
+    [[WaterJumpCoordinator shared] applySettings];
 
     return YES;
 }

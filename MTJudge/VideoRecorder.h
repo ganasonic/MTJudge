@@ -4,6 +4,9 @@
 
 @protocol VideoRecorderDelegate <NSObject>
 
+@optional
+- (void)videoRecorderDidStart:(id)recorder;
+@required
 // 撮影が完了したときに呼ばれるデリゲートメソッド
 - (void)videoRecorder:(id)recorder didFinishRecordingToOutputFileURL:(NSURL *)outputFileURL error:(NSError *)error;
 
@@ -34,6 +37,7 @@
 - (void)setZoomFactor:(CGFloat)factor completion:(void (^)(CGFloat actualFactor, NSError *error))completion;
 
 // 撮影を開始するメソッド
+@property (nonatomic, readonly) BOOL readyForRecording;
 - (void)startRecording;
 
 // 撮影を停止するメソッド

@@ -8,6 +8,7 @@
 
 #include "Common.h"
 #import "SettingViewController.h"
+#import "WaterJump/WaterJumpSettingsViewController.h"
 
 float F_SpeedPerSec;
 float M_SpeedPerSec;
@@ -15,6 +16,18 @@ float M_SpeedPerSec;
 @implementation SettingViewController
 
 - (void)viewDidLoad {
+    [super viewDidLoad];
+    UIButton *waterJump = [UIButton buttonWithType:UIButtonTypeSystem];
+    [waterJump setTitle:@"ウォータージャンプ / リモート録画" forState:UIControlStateNormal];
+    waterJump.translatesAutoresizingMaskIntoConstraints = NO;
+    [waterJump addTarget:self action:@selector(openWaterJump) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:waterJump];
+    [NSLayoutConstraint activateConstraints:@[
+        [waterJump.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:20],
+        [waterJump.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-20],
+        [waterJump.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-16],
+        [waterJump.heightAnchor constraintEqualToConstant:44]
+    ]];
  
     // 文字列を読み込む
     NSString *psFemale = [[NSUserDefaults standardUserDefaults] stringForKey:@"psFemale"];
@@ -40,6 +53,9 @@ float M_SpeedPerSec;
     self.psMale.delegate = self;
  }
 
+- (void)openWaterJump {
+    [self presentViewController:[[UINavigationController alloc] initWithRootViewController:[WaterJumpSettingsViewController new]] animated:YES completion:nil];
+}
 - (IBAction)applyPasesetTime:(id)sender {
     NSString *psFemaleValue = self.psFemale.text;
     NSString *psMaleValue = self.psMale.text;

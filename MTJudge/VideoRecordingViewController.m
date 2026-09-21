@@ -2,6 +2,9 @@
 #import "TagListViewController.h" // 追加
 #import "TagSelectionViewController.h"
 #import "FileSaver.h"
+#import "WaterJump/RecordingController.h"
+#import "WaterJump/WaterJumpCoordinator.h"
+#import "WaterJump/WaterJumpSettingsViewController.h"
 #import <AudioToolbox/AudioToolbox.h>
 #import <Vision/Vision.h>
 #import "SkeletonConnections.h"
@@ -42,6 +45,8 @@
 @end
 
 @interface VideoRecordingViewController () <UIDocumentPickerDelegate>
+@property (nonatomic, strong) UILabel *waterJumpStatus;
+@property (nonatomic, strong) RecordingController *recordingController;
 @property (nonatomic, strong) NSURL *pendingRecordingURL;
 @property (nonatomic, strong) UIDocumentPickerViewController *downloadsPicker;
 @property (nonatomic, copy) void (^downloadsReadyHandler)(void);
@@ -91,6 +96,21 @@
     
     self.videoRecorder = [[VideoRecorder alloc] init];
     self.videoRecorder.delegate = self;
+    self.recordingController = [[RecordingController alloc] initWithRecorder:self.videoRecorder];
+    __weak typeof(self) weakCamera = self;
+    self.recordingController.canStart = ^BOOL {
+        typeof(self) camera = weakCamera;
+        return camera && camera.view.window && !camera.player && !camera.pendingRecordingURL && !camera.presentedViewController && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+    };
+    self.recordingController.changed = ^{
+        typeof(self) camera = weakCamera;
+        camera.finishingRecording = [@[@"STOPPING", @"SAVING"] containsObject:camera.recordingController.state];
+        [camera updateCameraControls];
+        [[WaterJumpCoordinator shared] publish];
+    };
+
+    [WaterJumpCoordinator shared].recording = self.recordingController;
+    [[WaterJumpCoordinator shared] applySettings];
 
     NSLog(@"videoRecorder is %@", self.videoRecorder ? @"not nil" : @"nil");
     NSLog(@"previewView is %@", self.previewView ? @"not nil" : @"nil");
@@ -104,6 +124,24 @@
     self.playbackSpeed = 1.0;
     self.requestedZoom = 1.0;
     [self setupCameraControls];
+    UIButton *remote = [self cameraButtonWithAction:@selector(openWaterJump)];
+    [self styleButton:remote title:@"ウォータージャンプ設定" symbol:@"antenna.radiowaves.left.and.right" color:UIColor.darkGrayColor];
+    remote.accessibilityIdentifier = @"WJSettingsButton";
+    remote.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:remote];
+    self.waterJumpStatus = [UILabel new]; self.waterJumpStatus.translatesAutoresizingMaskIntoConstraints = NO;
+    self.waterJumpStatus.accessibilityIdentifier = @"WJStatusLabel";
+    self.waterJumpStatus.numberOfLines = 3; self.waterJumpStatus.font = [UIFont systemFontOfSize:11];
+    self.waterJumpStatus.textColor = UIColor.whiteColor; self.waterJumpStatus.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
+    [self.view addSubview:self.waterJumpStatus];
+    [NSLayoutConstraint activateConstraints:@[
+        [remote.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [remote.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+        [self.waterJumpStatus.topAnchor constraintEqualToAnchor:remote.bottomAnchor constant:4],
+        [self.waterJumpStatus.leadingAnchor constraintEqualToAnchor:remote.leadingAnchor],
+        [self.waterJumpStatus.widthAnchor constraintEqualToConstant:160]
+    ]];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateWaterJumpStatus) name:WJStatusChanged object:nil];
+    [self updateWaterJumpStatus];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackEnded:) name:UIApplicationDidEnterBackgroundNotification object:nil];
 
     dispatch_queue_t cameraQueue = dispatch_queue_create("com.MTJudge.cameraSetupQueue", DISPATCH_QUEUE_SERIAL);
@@ -119,12 +157,23 @@
             self.drawingLayer.frame = self.previewView.bounds;
             [self.previewView.layer addSublayer:self.drawingLayer];
             self.requestedZoom = self.videoRecorder.zoomFactor;
-            [self updateZoomControls];
+            [self updateCameraControls];
         });
     });
 }
 
+- (void)openWaterJump {
+    if (self.recordingController.busy) return;
+    [self presentViewController:[[UINavigationController alloc] initWithRootViewController:[WaterJumpSettingsViewController new]] animated:YES completion:nil];
+}
+- (void)updateWaterJumpStatus {
+    NSDictionary *status = [[WaterJumpCoordinator shared] status];
+    self.waterJumpStatus.hidden = ![WaterJumpCoordinator shared].modeEnabled && ![[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
+    [self updateCameraControls];
+    self.waterJumpStatus.text = [NSString stringWithFormat:@"%@\n%@", status[@"state"], status[@"message"]];
+}
 #pragma mark - VideoRecorderDelegate
+- (void)videoRecorderDidStart:(id)recorder { [self.recordingController didStart]; }
 
 // ファイルの書き込み完了後、メインスレッドで保存先を選択する。
 - (void)videoRecorder:(id)recorder didFinishRecordingToOutputFileURL:(NSURL *)outputFileURL error:(NSError *)error {
@@ -132,12 +181,30 @@
         self.finishingRecording = NO;
         [self updateCameraControls];
         BOOL finishedSuccessfully = !error || [error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] boolValue];
+        [self.recordingController finishedWithError:finishedSuccessfully ? nil : error];
         if (!finishedSuccessfully) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画できませんでした"
                                                                                    message:error.localizedDescription
                                                                             preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [self presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+        if (self.recordingController.automaticRecording) {
+            [[WaterJumpCoordinator shared] saveAutomatic:outputFileURL completion:^(NSURL *saved, NSError *saveError) {
+                if (saved) {
+                    self.latestRecordingURL = saved;
+                    [[NSUserDefaults standardUserDefaults] setObject:saved.path forKey:@"LatestCameraRecordingPath"];
+                    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+                    [self.recordingController markSaved];
+                } else {
+                    self.latestRecordingURL = outputFileURL;
+                    self.pendingRecordingURL = outputFileURL;
+                    [self.recordingController finishedWithError:saveError];
+                    [self presentRecordingReview];
+                }
+                [self updateCameraControls];
+            }];
             return;
         }
         NSURL *directory = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
@@ -160,6 +227,7 @@
         self.pendingRecordingURL = localURL;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
         [self updateCameraControls];
+        [self.recordingController markSaved];
         [self presentRecordingReview];
     });
 }
@@ -235,6 +303,7 @@
                 // アプリ内には直近の1本だけ再生用コピーを保持する。
                 self.latestRecordingURL = sourceURL;
                 self.pendingRecordingURL = nil;
+                [self.recordingController markSaved];
                 [[NSUserDefaults standardUserDefaults] setObject:sourceURL.path forKey:@"LatestCameraRecordingPath"];
                 [self updateCameraControls];
                 [self dismissViewControllerAnimated:YES completion:^{
@@ -494,14 +563,20 @@
     if (self.finishingRecording || self.player) return;
     if (self.videoRecorder.isRecording) {
         self.finishingRecording = YES;
-        [self.videoRecorder stopRecording];
+        [self.recordingController stop];
         AudioServicesPlaySystemSound(1306);
     } else {
         if (self.pendingRecordingURL) {
             [self presentRecordingSavePicker];
             return;
         }
-        [self.videoRecorder startRecording];
+        NSError *startError = nil;
+        if (![self.recordingController startAutomatic:[WaterJumpCoordinator shared].modeEnabled error:&startError]) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画を開始できません" message:startError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+            return;
+        }
         AudioServicesPlaySystemSound(1305);
     }
     [self updateCameraControls];
@@ -605,12 +680,12 @@
     [self updateZoomControls];
     if (playing) [self.playbackControls.superview bringSubviewToFront:self.playbackControls];
     [self updateCameraControlsPosition];
-    self.recordButton.enabled = !playing && !self.finishingRecording && !self.pendingRecordingURL;
+    self.recordButton.enabled = !playing && !self.finishingRecording && !self.pendingRecordingURL && (recording || self.videoRecorder.readyForRecording);
     self.playButton.enabled = self.latestRecordingURL != nil && !recording && !self.finishingRecording;
     self.skeletonButton.enabled = !playing;
     self.tagButton.enabled = !recording && !playing && !self.finishingRecording;
     self.deleteButton.hidden = self.latestRecordingURL == nil;
-    self.deleteButton.enabled = !recording && !self.finishingRecording;
+    self.deleteButton.enabled = !recording && !self.finishingRecording && ![[WaterJumpCoordinator shared] protectsVideo:self.latestRecordingURL];
     [self styleButton:self.deleteButton title:@"再生用動画を削除" symbol:@"trash" color:UIColor.systemRedColor];
     self.saveButton.hidden = !self.pendingRecordingURL;
     self.saveButton.enabled = !playing;
@@ -638,7 +713,8 @@
 - (void)deleteLatestRecording:(id)sender {
     if (!self.latestRecordingURL || self.videoRecorder.isRecording || self.finishingRecording) return;
     NSURL *url = self.latestRecordingURL;
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"再生用動画を削除しますか？" message:self.pendingRecordingURL ? @"未保存の動画を削除します。この操作は取り消せません。" : @"アプリ内の再生用動画を削除します。ダウンロードに保存済みの動画は残ります。" preferredStyle:UIAlertControllerStyleAlert];
+    if ([[WaterJumpCoordinator shared] protectsVideo:url]) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"再生用動画を削除しますか？" message:self.pendingRecordingURL ? @"未保存の動画を削除します。この操作は取り消せません。" : ([url.path containsString:@"/Documents/Recordings/"] ? @"この端末に保存した練習動画を削除します。この操作は取り消せません。転送済みの相手側動画は残ります。" : @"アプリ内の再生用動画を削除します。ダウンロードに保存済みの動画は残ります。") preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [self stopPlayback];
@@ -1027,6 +1103,14 @@
     [self updateCameraControlsPosition];
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (!self.recordingController.busy && !self.pendingRecordingURL) {
+        NSString *path = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestCameraRecordingPath"];
+        if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) self.latestRecordingURL = [NSURL fileURLWithPath:path];
+        [self updateCameraControls];
+    }
+}
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [self stopPlayback];

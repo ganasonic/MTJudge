@@ -7,6 +7,7 @@
 // プライベートプロパティをここで宣言
 @interface VideoRecorder () <AVCaptureFileOutputRecordingDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
+@property (atomic) BOOL stopRequested;
 @property (nonatomic, strong) AVCaptureSession *captureSession;
 @property (atomic, strong) AVCaptureDevice *cameraDevice;
 @property (nonatomic, strong) dispatch_queue_t zoomQueue;
@@ -206,8 +207,11 @@
 #pragma mark - Recording Control
 
 // 録画の開始
+- (BOOL)readyForRecording { return self.captureSession.isRunning && self.cameraDevice != nil && !self.captureSession.isInterrupted; }
+
 - (void)startRecording {
     NSLog(@"startRecording @VideoRecorder");
+    self.stopRequested = NO;
     @synchronized (self) {
         _isRecording = YES;
         self.skeletonChanges = [NSMutableArray arrayWithObject:@{@"time": @0, @"enabled": @(_skeletonDrawingEnabled)}];
@@ -247,6 +251,7 @@
 // 録画の停止
 - (void)stopRecording {
     NSLog(@"stopRecording @VideoRecorder");
+    self.stopRequested = YES;
     _isRecording = NO;
 
     // 録画の停止
@@ -256,6 +261,13 @@
 }
 
 #pragma mark - AVCaptureFileOutputRecordingDelegate
+- (void)captureOutput:(AVCaptureFileOutput *)output didStartRecordingToOutputFileAtURL:(NSURL *)fileURL fromConnections:(NSArray *)connections {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([self.delegate respondsToSelector:@selector(videoRecorderDidStart:)]) [self.delegate videoRecorderDidStart:self];
+        if (self.stopRequested) [self.movieFileOutput stopRecording];
+    });
+}
+
 
 // 録画が完了したときに呼ばれるデリゲートメソッド
 - (void)captureOutput:(AVCaptureFileOutput *)output didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL fromConnections:(NSArray *)connections error:(NSError *)error {
