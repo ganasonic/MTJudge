@@ -564,7 +564,6 @@
     if (self.videoRecorder.isRecording) {
         self.finishingRecording = YES;
         [self.recordingController stop];
-        AudioServicesPlaySystemSound(1306);
     } else {
         if (self.pendingRecordingURL) {
             [self presentRecordingSavePicker];
@@ -577,7 +576,6 @@
             [self presentViewController:alert animated:YES completion:nil];
             return;
         }
-        AudioServicesPlaySystemSound(1305);
     }
     [self updateCameraControls];
 }
