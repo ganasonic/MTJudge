@@ -72,6 +72,7 @@
 		CA85EEC92E815F13002BF359 /* TagItemsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CA85EEC82E815F13002BF359 /* TagItemsViewController.m */; };
 		CA85EECF2E817E99002BF359 /* TagItemSelectionViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CA85EECE2E817E99002BF359 /* TagItemSelectionViewController.m */; };
 		CAF09A3D2E64626F000CAC92 /* data.json in Resources */ = {isa = PBXBuildFile; fileRef = CAF09A3C2E64626F000CAC92 /* data.json */; };
+		CE1AC20150413B92F0CBA1FE /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = FF91EA9C2F93729761AA04FF /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m */; };
 		D7E05DFE6A6C28C4E399AF1D /* MTJudge/WaterJump/WatchRemoteController.m in Sources */ = {isa = PBXBuildFile; fileRef = 9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */; };
 		D9EB0DE920F0B4E90433A993 /* MTJudge/WaterJump/RecordingController.m in Sources */ = {isa = PBXBuildFile; fileRef = 653467DD2BDB984EEE0DC45D /* MTJudge/WaterJump/RecordingController.m */; };
 		E1727CFF3F381B863DF9A165 /* MTJudge/WaterJump/PeerDiscoveryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB05D305E2AAB63DC4A20226 /* MTJudge/WaterJump/PeerDiscoveryManager.swift */; };
@@ -131,9 +132,9 @@
 		0E359832226550C80093671C /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
 		0E359834226550C80093671C /* FirstViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FirstViewController.h; sourceTree = "<group>"; };
 		0E359835226550C80093671C /* FirstViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FirstViewController.m; sourceTree = "<group>"; };
-		0E35983B226550C80093671C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = base.lproj/Main.storyboard; sourceTree = "<group>"; };
-		0E35983D226550C90093671C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = assets.xcassets; sourceTree = "<group>"; };
-		0E359840226550C90093671C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		0E35983B226550C80093671C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+		0E35983D226550C90093671C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		0E359840226550C90093671C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		0E359842226550C90093671C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		0E359843226550C90093671C /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		0E359849226550C90093671C /* MTJudgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MTJudgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -184,6 +185,7 @@
 		2C90D5632784C7447A594CA3 /* MTJudge/WaterJump/ReceivedVideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/ReceivedVideoManager.swift; sourceTree = SOURCE_ROOT; };
 		3AA1EF6B1915CA6E5933AE06 /* MTJudgeTests/RecordingControllerRegression.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudgeTests/RecordingControllerRegression.m; sourceTree = SOURCE_ROOT; };
 		653467DD2BDB984EEE0DC45D /* MTJudge/WaterJump/RecordingController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/RecordingController.m; sourceTree = SOURCE_ROOT; };
+		67CE8EAEF1F8345CD57479E9 /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.h; sourceTree = SOURCE_ROOT; };
 		7263AFC553342BD3E2F12ABF /* MTJudge/WaterJump/TransferChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/TransferChannel.swift; sourceTree = SOURCE_ROOT; };
 		83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/VideoTransferManager.swift; sourceTree = SOURCE_ROOT; };
 		9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WatchRemoteController.m; sourceTree = SOURCE_ROOT; };
@@ -221,6 +223,7 @@
 		F37A25F8A060C8CA03451779 /* MTJudge/WaterJump/RecordingController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/RecordingController.h; sourceTree = SOURCE_ROOT; };
 		F5488A591BB841A18E19583F /* MTJudge/WaterJump/WaterJumpCoordinator.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpCoordinator.m; sourceTree = SOURCE_ROOT; };
 		FB05D305E2AAB63DC4A20226 /* MTJudge/WaterJump/PeerDiscoveryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/PeerDiscoveryManager.swift; sourceTree = SOURCE_ROOT; };
+		FF91EA9C2F93729761AA04FF /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -279,6 +282,8 @@
 		0E359825226550C80093671C = {
 			isa = PBXGroup;
 			children = (
+				FF91EA9C2F93729761AA04FF /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m */,
+				67CE8EAEF1F8345CD57479E9 /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.h */,
 				EB588EE5FDB85BB65F0EBB3F /* MTJudge/WaterJump/WaterJumpSettingsViewController.m */,
 				A52C62819DACD06DA9A2B113 /* MTJudge/WaterJump/WaterJumpSettingsViewController.h */,
 				2BB23E521B4AFD02A7DAA962 /* MTJudge/WaterJump/VideoReceiver.swift */,
@@ -607,6 +612,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE1AC20150413B92F0CBA1FE /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m in Sources */,
 				5723C9EC9508B9E5F3094E4E /* MTJudge/WaterJump/WaterJumpSettingsViewController.m in Sources */,
 				29DCE430167C01DF5B3CCEEA /* MTJudge/WaterJump/VideoReceiver.swift in Sources */,
 				87748C9C4BD85B9F777BADC7 /* MTJudge/WaterJump/VideoTransferManager.swift in Sources */,
@@ -846,7 +852,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -871,7 +877,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

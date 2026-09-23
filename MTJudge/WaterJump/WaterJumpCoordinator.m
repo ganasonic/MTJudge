@@ -1,6 +1,7 @@
 #import "WaterJumpCoordinator.h"
 #import "RecordingController.h"
 #import "WatchRemoteController.h"
+#import "WaterJumpReceivedPlayerViewController.h"
 #import "MTJudge-Swift.h"
 #import <UIKit/UIKit.h>
 #import <AVKit/AVKit.h>
@@ -9,7 +10,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 @property (nonatomic, strong) RemoteRecordingServer *server;
 @property (nonatomic, strong) WatchRemoteController *watch;
 @property (nonatomic, strong) VideoTransferManager *transfer;
-@property (nonatomic, weak) AVPlayerViewController *receivedPlayer;
+@property (nonatomic, strong) WaterJumpReceivedPlayerViewController *receivedPlayer;
 @property (nonatomic, strong) NSURL *waitingReceivedURL;
 @end
 @implementation WaterJumpCoordinator
@@ -57,13 +58,14 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     UIViewController *host = UIApplication.sharedApplication.keyWindow.rootViewController;
     while (host.presentedViewController && host.presentedViewController != self.receivedPlayer) host = host.presentedViewController;
     if ([host isKindOfClass:UIAlertController.class] || host.isBeingDismissed) return;
-    AVPlayerViewController *player = self.receivedPlayer;
+    WaterJumpReceivedPlayerViewController *player = self.receivedPlayer;
     NSURL *url = self.waitingReceivedURL; self.waitingReceivedURL = nil;
-    if (player && player.presentingViewController) { player.player = [AVPlayer playerWithURL:url]; [player.player play]; }
+    if (player && player.presentingViewController) { [player replaceVideoURL:url]; }
     else {
-        player = [AVPlayerViewController new]; self.receivedPlayer = player;
-        player.player = [AVPlayer playerWithURL:url];
-        [host presentViewController:player animated:YES completion:^{ [player.player play]; }];
+        player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url]; self.receivedPlayer = player;
+        player.modalPresentationStyle = UIModalPresentationFullScreen;
+        player.modalPresentationCapturesStatusBarAppearance = YES;
+        [host presentViewController:player animated:YES completion:nil];
     }
 #if DEBUG
     NSLog(@"[iPad] latest video displayed: %@", url.lastPathComponent);

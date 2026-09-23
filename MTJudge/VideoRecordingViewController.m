@@ -112,6 +112,10 @@
     [WaterJumpCoordinator shared].recording = self.recordingController;
     [[WaterJumpCoordinator shared] applySettings];
 
+    // カメラセッションの初期化中も白いStoryboard背景を表示しない。
+    // セッション開始後にpreviewLayerが接続されるまで黒背景で待機する。
+    self.previewView.backgroundColor = UIColor.blackColor;
+
     NSLog(@"videoRecorder is %@", self.videoRecorder ? @"not nil" : @"nil");
     NSLog(@"previewView is %@", self.previewView ? @"not nil" : @"nil");
 

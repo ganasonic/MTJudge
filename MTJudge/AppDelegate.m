@@ -8,12 +8,18 @@
 
 #import "AppDelegate.h"
 #import "WaterJump/WaterJumpCoordinator.h"
+#import <objc/runtime.h>
 
 // Storyboard screens designed with a 20-point status-bar inset retain their
 // relative layout, while moving below larger camera/sensor safe areas.
 @interface LegacySafeAreaView : UIView
 @property (nonatomic) CGFloat appliedTopOffset;
 @end
+
+static const CGFloat MTJudgeDesignWidth = 402.0;
+static const CGFloat MTJudgeDesignHeight = 874.0;
+static const void *MTJudgeOriginalFramesKey = &MTJudgeOriginalFramesKey;
+static const void *MTJudgeLastResponsiveSizeKey = &MTJudgeLastResponsiveSizeKey;
 
 @implementation LegacySafeAreaView
 - (void)safeAreaInsetsDidChange {
@@ -24,13 +30,52 @@
     [super layoutSubviews];
     CGFloat offset = MAX(0, self.safeAreaInsets.top - 20.0);
     CGFloat delta = offset - self.appliedTopOffset;
-    if (fabs(delta) < 0.01) return;
-    for (UIView *subview in self.subviews) {
-        CGRect frame = subview.frame;
-        frame.origin.y += delta;
-        subview.frame = frame;
+    if (fabs(delta) >= 0.01) {
+        for (UIView *subview in self.subviews) {
+            CGRect frame = subview.frame;
+            frame.origin.y += delta;
+            subview.frame = frame;
+        }
+        self.appliedTopOffset = offset;
     }
-    self.appliedTopOffset = offset;
+
+    // 旧StoryboardはiPhone用402x874の固定フレームで作られている。
+    // iPadではルートViewだけが拡大され、子Viewが左上に残るため、
+    // ルートの直接の子Viewを同じ比率で画面いっぱいへ配置し直す。
+    if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return;
+    [self applyResponsiveFrames];
+    // 子ViewのAuto Layoutが完了した後にも再適用し、固定フレームが左上へ戻るのを防ぐ。
+    NSValue *size = [NSValue valueWithCGSize:self.bounds.size];
+    NSValue *lastSize = objc_getAssociatedObject(self, MTJudgeLastResponsiveSizeKey);
+    if (![lastSize isEqual:size]) {
+        objc_setAssociatedObject(self, MTJudgeLastResponsiveSizeKey, size, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.window) [self applyResponsiveFrames];
+        });
+    }
+}
+
+- (void)applyResponsiveFrames {
+    if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return;
+    CGFloat scaleX = self.bounds.size.width / MTJudgeDesignWidth;
+    CGFloat scaleY = self.bounds.size.height / MTJudgeDesignHeight;
+    if (scaleX <= 0 || scaleY <= 0) return;
+    NSMutableDictionary *originalFrames = objc_getAssociatedObject(self, MTJudgeOriginalFramesKey);
+    if (!originalFrames) {
+        originalFrames = [NSMutableDictionary dictionaryWithCapacity:self.subviews.count];
+        objc_setAssociatedObject(self, MTJudgeOriginalFramesKey, originalFrames, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    for (UIView *subview in self.subviews) {
+        NSValue *key = [NSValue valueWithNonretainedObject:subview];
+        NSValue *stored = originalFrames[key];
+        if (!stored) { stored = [NSValue valueWithCGRect:subview.frame]; originalFrames[key] = stored; }
+        CGRect frame = stored.CGRectValue;
+        // Auto Layoutがframeを再計算しても残るよう、frameではなくtransformで拡大する。
+        // centerはデザイン座標をiPad座標へ写像し、左右の余白を均等にする。
+        subview.transform = CGAffineTransformMakeScale(scaleX, scaleY);
+        subview.center = CGPointMake(CGRectGetMidX(frame) * scaleX,
+                                     CGRectGetMidY(frame) * scaleY);
+    }
 }
 @end
 
