@@ -87,32 +87,21 @@ static const void *MTJudgeLastResponsiveSizeKey = &MTJudgeLastResponsiveSizeKey;
 
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Override point for customization after application launch.
-    
-    // JSONから開発者モードの状態を取得
-    BOOL isDeveloperMode = [self isDeveloperModeEnabled];
-
-    // ストーリーボードからUITabBarControllerを取得
-    UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"Main" bundle:nil];
-    UITabBarController *tabBarController = (UITabBarController *)[storyboard instantiateInitialViewController];
-
-    if (!isDeveloperMode) {
-        // 全てのビューコントローラーを取得
-        NSMutableArray *allViewControllers = [tabBarController.viewControllers mutableCopy];
-
-        // 開発者モード用のタブ（例：最後のタブ）を非表示にする
-        // ここでは、配列から最後のオブジェクトを削除しています。
-        if (allViewControllers.count > 1) {
-            [allViewControllers removeLastObject];
-            tabBarController.viewControllers = allViewControllers;
-        }
-    }
-    
-    self.window.rootViewController = tabBarController;
-    [self.window makeKeyAndVisible];
+    // UIの生成はSceneDelegateで行う。ここではアプリ全体の初期設定だけを行う。
     [[WaterJumpCoordinator shared] applySettings];
 
     return YES;
+}
+
+- (UISceneConfiguration *)application:(UIApplication *)application
+        configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession
+                                      options:(UISceneConnectionOptions *)options {
+    return [[UISceneConfiguration alloc] initWithName:@"Default Configuration"
+                                         sessionRole:connectingSceneSession.role];
+}
+
+- (void)application:(UIApplication *)application didDiscardSceneSessions:(NSSet<UISceneSession *> *)sceneSessions {
+    // MTJudgeは単一シーン構成のため、破棄時のUI処理はSceneDelegateに委ねる。
 }
 
 - (BOOL)isDeveloperModeEnabled {

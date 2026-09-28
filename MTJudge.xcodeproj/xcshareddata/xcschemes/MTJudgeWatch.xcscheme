@@ -17,20 +17,7 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "217B52D2F85A49B551CA544A"
                BuildableName = "MTJudgeWatch.app"
-               ReferencedContainer = "container:MTJudge.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "YES"
-            buildForProfiling = "YES"
-            buildForArchiving = "YES"
-            buildForAnalyzing = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "0E35982D226550C80093671C"
-               BuildableName = "MTJudge.app"
-               BlueprintName = "MTJudge"
+               BlueprintName = "MTJudgeWatch"
                ReferencedContainer = "container:MTJudge.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 50;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -53,8 +53,15 @@
 		5723C9EC9508B9E5F3094E4E /* MTJudge/WaterJump/WaterJumpSettingsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = EB588EE5FDB85BB65F0EBB3F /* MTJudge/WaterJump/WaterJumpSettingsViewController.m */; };
 		624D455F6183D1D2354BBA42 /* MTJudge/WaterJump/TransferChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7263AFC553342BD3E2F12ABF /* MTJudge/WaterJump/TransferChannel.swift */; };
 		6DDC67FF2C83FD23DEF7311F /* MTJudgeWatch/MTJudgeWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 038F090FE639BE252399DB15 /* MTJudgeWatch/MTJudgeWatchApp.swift */; };
+		6DDC68002C83FD23DEF7311F /* MTJudgeWatch/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 038F0910E639BE252399DB15 /* MTJudgeWatch/Assets.xcassets */; };
 		87748C9C4BD85B9F777BADC7 /* MTJudge/WaterJump/VideoTransferManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */; };
 		91E3FA2906F83913E858C98F /* MTJudge/WaterJump/WaterJumpCoordinator.m in Sources */ = {isa = PBXBuildFile; fileRef = F5488A591BB841A18E19583F /* MTJudge/WaterJump/WaterJumpCoordinator.m */; };
+		A1B2C3D40000000000000001 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* SceneDelegate.m */; };
+		B1C2D3E40000000000000001 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000003 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m */; };
+		B1C2D3E40000000000000011 /* MTJudge/Analysis/PoseAnalyzer.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000013 /* MTJudge/Analysis/PoseAnalyzer.m */; };
+		B1C2D3E40000000000000012 /* MTJudge/Analysis/VideoPoseAnalysisManager.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000014 /* MTJudge/Analysis/VideoPoseAnalysisManager.m */; };
+		B1C2D3E40000000000000017 /* MTJudge/Analysis/TakeoffAnalysisConfig.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000019 /* MTJudge/Analysis/TakeoffAnalysisConfig.m */; };
+		B1C2D3E40000000000000020 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000022 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m */; };
 		CA0A3CB32E5154300028E396 /* SettingViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CA0A3CB22E5154300028E396 /* SettingViewController.m */; };
 		CA537D662E6D273B0002A9DA /* VideoRecorder.m in Sources */ = {isa = PBXBuildFile; fileRef = CA537D652E6D273B0002A9DA /* VideoRecorder.m */; };
 		CA537D672E6D273B0002A9DA /* TagManager.m in Sources */ = {isa = PBXBuildFile; fileRef = CA537D632E6D273B0002A9DA /* TagManager.m */; };
@@ -121,6 +128,7 @@
 /* Begin PBXFileReference section */
 		0242E7CD0435FA28BD767208 /* MTJudge/WaterJump/WatchRemoteController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WatchRemoteController.h; sourceTree = SOURCE_ROOT; };
 		038F090FE639BE252399DB15 /* MTJudgeWatch/MTJudgeWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudgeWatch/MTJudgeWatchApp.swift; sourceTree = SOURCE_ROOT; };
+		038F0910E639BE252399DB15 /* MTJudgeWatch/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MTJudgeWatch/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 		065A5345E6BC291A76DA09FE /* MTJudge/WaterJump/WaterJumpCoordinator.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpCoordinator.h; sourceTree = SOURCE_ROOT; };
 		0E03748622A4C09500E4D686 /* MeasureViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MeasureViewController.h; sourceTree = "<group>"; };
 		0E03748722A4C09500E4D686 /* MeasureViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MeasureViewController.m; sourceTree = "<group>"; };
@@ -189,7 +197,19 @@
 		7263AFC553342BD3E2F12ABF /* MTJudge/WaterJump/TransferChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/TransferChannel.swift; sourceTree = SOURCE_ROOT; };
 		83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/VideoTransferManager.swift; sourceTree = SOURCE_ROOT; };
 		9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WatchRemoteController.m; sourceTree = SOURCE_ROOT; };
+		A1B2C3D40000000000000002 /* SceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; };
+		A1B2C3D40000000000000003 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
 		A52C62819DACD06DA9A2B113 /* MTJudge/WaterJump/WaterJumpSettingsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpSettingsViewController.h; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000002 /* MTJudge/WaterJump/WaterJumpComparisonViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpComparisonViewController.h; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000003 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpComparisonViewController.m; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000013 /* MTJudge/Analysis/PoseAnalyzer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/PoseAnalyzer.m; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000014 /* MTJudge/Analysis/VideoPoseAnalysisManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/VideoPoseAnalysisManager.m; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000015 /* MTJudge/Analysis/PoseAnalyzer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Analysis/PoseAnalyzer.h; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000016 /* MTJudge/Analysis/VideoPoseAnalysisManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Analysis/VideoPoseAnalysisManager.h; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000018 /* MTJudge/Analysis/TakeoffAnalysisConfig.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Analysis/TakeoffAnalysisConfig.h; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000019 /* MTJudge/Analysis/TakeoffAnalysisConfig.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/TakeoffAnalysisConfig.m; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000021 /* MTJudge/Analysis/TakeoffAngleAnalyzer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Analysis/TakeoffAngleAnalyzer.h; sourceTree = SOURCE_ROOT; };
+		B1C2D3E40000000000000022 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/TakeoffAngleAnalyzer.m; sourceTree = SOURCE_ROOT; };
 		CA0A3CB22E5154300028E396 /* SettingViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SettingViewController.m; sourceTree = "<group>"; };
 		CA0A3CB42E5154800028E396 /* SettingViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SettingViewController.h; sourceTree = "<group>"; };
 		CA537D5E2E6D273B0002A9DA /* Tag.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Tag.h; sourceTree = "<group>"; };
@@ -268,6 +288,7 @@
 			isa = PBXGroup;
 			children = (
 				038F090FE639BE252399DB15 /* MTJudgeWatch/MTJudgeWatchApp.swift */,
+				038F0910E639BE252399DB15 /* MTJudgeWatch/Assets.xcassets */,
 				27DDAA7C6240B9E2D7F7077D /* MTJudgeWatch.app */,
 				CA6B36AE2E74EE2B00A5E218 /* AVFoundation.framework */,
 				CA6B36AC2E74EE1C00A5E218 /* QuartzCore.framework */,
@@ -321,6 +342,18 @@
 		0E359830226550C80093671C /* MTJudge */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D40000000000000002 /* SceneDelegate.h */,
+				A1B2C3D40000000000000003 /* SceneDelegate.m */,
+				B1C2D3E40000000000000002 /* MTJudge/WaterJump/WaterJumpComparisonViewController.h */,
+				B1C2D3E40000000000000003 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m */,
+				B1C2D3E40000000000000013 /* MTJudge/Analysis/PoseAnalyzer.m */,
+				B1C2D3E40000000000000014 /* MTJudge/Analysis/VideoPoseAnalysisManager.m */,
+				B1C2D3E40000000000000015 /* MTJudge/Analysis/PoseAnalyzer.h */,
+				B1C2D3E40000000000000016 /* MTJudge/Analysis/VideoPoseAnalysisManager.h */,
+				B1C2D3E40000000000000018 /* MTJudge/Analysis/TakeoffAnalysisConfig.h */,
+				B1C2D3E40000000000000019 /* MTJudge/Analysis/TakeoffAnalysisConfig.m */,
+				B1C2D3E40000000000000021 /* MTJudge/Analysis/TakeoffAngleAnalyzer.h */,
+				B1C2D3E40000000000000022 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m */,
 				CA85EEC52E815912002BF359 /* TagListViewController.h */,
 				CA85EEC62E815912002BF359 /* TagListViewController.m */,
 				CA85EEC82E815F13002BF359 /* TagItemsViewController.m */,
@@ -513,7 +546,8 @@
 		0E359826226550C80093671C /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 1420;
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
 				ORGANIZATIONNAME = "Yasunori Nagashima";
 				TargetAttributes = {
 					0E35982D226550C80093671C = {
@@ -602,6 +636,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6DDC68002C83FD23DEF7311F /* MTJudgeWatch/Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -628,6 +663,12 @@
 				CA0A3CB32E5154300028E396 /* SettingViewController.m in Sources */,
 				0E35987B22656A260093671C /* ReductionViewControler.m in Sources */,
 				0E359833226550C80093671C /* AppDelegate.m in Sources */,
+				A1B2C3D40000000000000001 /* SceneDelegate.m in Sources */,
+				B1C2D3E40000000000000001 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m in Sources */,
+				B1C2D3E40000000000000011 /* MTJudge/Analysis/PoseAnalyzer.m in Sources */,
+				B1C2D3E40000000000000012 /* MTJudge/Analysis/VideoPoseAnalysisManager.m in Sources */,
+				B1C2D3E40000000000000017 /* MTJudge/Analysis/TakeoffAnalysisConfig.m in Sources */,
+				B1C2D3E40000000000000020 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m in Sources */,
 				0E03748822A4C09500E4D686 /* MeasureViewController.m in Sources */,
 				CA85EEC72E815912002BF359 /* TagListViewController.m in Sources */,
 				CA537D722E6D2A380002A9DA /* TagSelectionViewController.m in Sources */,
@@ -750,8 +791,10 @@
 				CODE_SIGN_IDENTITY = "iPhone Distribution";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = UM9N74S758;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -771,6 +814,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
 			name = Debug;
 		};
@@ -810,8 +854,10 @@
 				CODE_SIGN_IDENTITY = "iPhone Distribution";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = UM9N74S758;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -824,6 +870,8 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -835,22 +883,25 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
-				DEVELOPMENT_TEAM = UM9N74S758;
+				CURRENT_PROJECT_VERSION = 23;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = (
 					PICKER_AIR_DATA_FROM_JSON,
 					"$(inherited)",
 				);
 				INFOPLIST_FILE = MTJudge/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MTJudge;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.93;
+				MARKETING_VERSION = 4.3;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				SKIP_INSTALL = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -863,19 +914,23 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 23;
 				DEVELOPMENT_TEAM = UM9N74S758;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = PICKER_AIR_DATA_FROM_JSON;
 				INFOPLIST_FILE = MTJudge/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MTJudge;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.93;
+				MARKETING_VERSION = 4.3;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				SKIP_INSTALL = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -886,8 +941,8 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UM9N74S758;
 				INFOPLIST_FILE = MTJudgeTests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -905,8 +960,8 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UM9N74S758;
 				INFOPLIST_FILE = MTJudgeTests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -923,8 +978,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UM9N74S758;
 				INFOPLIST_FILE = MTJudgeUITests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -941,8 +996,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UM9N74S758;
 				INFOPLIST_FILE = MTJudgeUITests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -958,14 +1013,16 @@
 		9FB40F81649242ADD5A99310 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UM9N74S758;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MTJudgeWatch/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -977,14 +1034,16 @@
 		B855F593E7E53B3F417B1A82 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UM9N74S758;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MTJudgeWatch/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

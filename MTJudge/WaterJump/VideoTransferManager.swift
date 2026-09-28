@@ -85,6 +85,19 @@ import Network
         guard persist() else { return }; state = "WAITING_TRANSFER"; message = "転送待ち \(jobs.count)本"; changed?(); pump()
     }
     @objc public func retry() { pump() }
+    /// 保存済み動画のサイドカーを使って、完了済みの動画も再転送キューへ戻す。
+    @objc public func requeue(_ url: URL) {
+        guard let data = try? Data(contentsOf: url.appendingPathExtension("wj.json")),
+              var info = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let id = info["id"] as? String, UUID(uuidString: id) != nil,
+              FileManager.default.fileExists(atPath: url.path) else { return }
+        info["transferRequested"] = true
+        info["transferComplete"] = false
+        jobs.removeAll { ($0["id"] as? String) == id }
+        jobs.append(["id": id, "file": url.lastPathComponent, "metadata": info, "peer": info["peer"] as? String ?? discovery.selectedID])
+        _ = persist()
+        state = "WAITING_TRANSFER"; message = "再転送待ち"; changed?(); pump()
+    }
     private func publish(_ state: String, _ message: String, _ progress: Double) {
         DispatchQueue.main.async { self.state = state; self.message = message; self.progress = progress; self.changed?() }
     }

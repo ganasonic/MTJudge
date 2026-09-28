@@ -80,10 +80,17 @@ import Darwin
         guard headers["transfer-encoding"] == nil, (headers["content-length"] ?? "0") == "0" else { respond(id, 400, ["error":"本文は不要です"]); return }
         if method == "GET" && path == "/" { send(id, 200, "text/html; charset=utf-8", Data(Self.page.utf8)); return }
         guard !token.isEmpty, headers["x-mtjudge-token"] == token else { respond(id, 403, ["error":"接続用URLをカメラ設定から開いてください"]); return }
+        if let session = headers["x-mtjudge-session"], UUID(uuidString: session) != nil {
+            UserDefaults.standard.set(session, forKey: "WJSessionID")
+            UserDefaults.standard.set("SUB_CAMERA", forKey: "WJCameraRole")
+        }
         if let origin = headers["origin"], origin != "http://" + (headers["host"] ?? "") { respond(id, 403, [:]); return }
         if method == "GET" && path == "/status" { respond(id, 200, status?() ?? ["state":"IDLE"]); return }
         guard method == "POST", ["/start", "/stop"].contains(path) else { respond(id, 404, [:]); return }
+        let isRemoteStart = method == "POST" && path == "/start"
+        if isRemoteStart { UserDefaults.standard.set(true, forKey: "WJRemoteStartInProgress") }
         let response = command?(path == "/start" ? "START" : "STOP") ?? ["error":"カメラ画面を開いてください"]
+        if isRemoteStart { UserDefaults.standard.set(false, forKey: "WJRemoteStartInProgress") }
         respond(id, response["error"] == nil ? 200 : 409, response)
     }
     private func respond(_ id: UUID, _ code: Int, _ object: [String: Any]) {

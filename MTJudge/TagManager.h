@@ -18,6 +18,10 @@
 // デフォルトタグの設定
 - (void)setDefaultTag:(Tag *)tag withItemId:(NSString *)itemId;
 
+// タグ選択画面で最後に選択したアイテムをカテゴリごとに保持する。
+- (void)rememberLastSelectedItemId:(NSString *)itemId forTag:(Tag *)tag;
+- (NSString *)lastSelectedItemIdForTag:(Tag *)tag;
+
 // タグデータの保存と読み込み
 - (void)saveTags;
 - (void)loadTags;

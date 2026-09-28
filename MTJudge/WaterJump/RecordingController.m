@@ -67,8 +67,21 @@
         return NO;
     }
     self.automaticRecording = automatic;
+    if (automatic) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        BOOL remoteStart = [defaults boolForKey:@"WJRemoteStartInProgress"];
+        // 本体の録画ボタンから開始した場合は、過去にサブ端末として使った状態を
+        // 引き継がず、必ず新しいメイン撮影セッションとして開始する。
+        if (!remoteStart) {
+            [defaults setObject:NSUUID.UUID.UUIDString forKey:@"WJSessionID"];
+            [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
+        } else if (![defaults stringForKey:@"WJSessionID"]) {
+            [defaults setObject:NSUUID.UUID.UUIDString forKey:@"WJSessionID"];
+        }
+    }
     self.state = @"RECORDING";
     [self.recorder startRecording];
+    if (self.remoteCommand) self.remoteCommand(@"START");
     // 既存の本体録画と同じ開始音。リモコン開始でも撮影端末側で鳴らす。
     [self playCue:NO];
     [self notify];
@@ -91,6 +104,7 @@
     [self.timer invalidate]; self.timer = nil;
     self.state = @"STOPPING";
     [self.recorder stopRecording];
+    if (self.remoteCommand) self.remoteCommand(@"STOP");
     // 自動停止・本体停止・リモコン停止を同じ終了音に統一する。
     [self playCue:YES];
     [self notify];

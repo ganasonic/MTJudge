@@ -13,10 +13,13 @@ extern NSString * const WJStatusChanged;
 @property (nonatomic, readonly) NSArray<NSDictionary *> *discoveredPeers;
 - (BOOL)registerPeer:(NSString *)name code:(NSString *)code;
 - (void)retryTransfer;
+- (void)retransferVideoURL:(NSURL *)url;
 - (BOOL)protectsVideo:(NSURL *)url;
 - (void)applySettings;
 - (NSDictionary *)status;
 - (NSDictionary *)command:(NSString *)command;
 - (void)publish;
-- (void)saveAutomatic:(NSURL *)url completion:(void (^)(NSURL *, NSError *))completion;
+- (void)saveAutomatic:(NSURL *)url completion:(void (^)(NSURL *, NSDictionary *, NSError *))completion;
+- (void)enqueueAutomaticVideoURL:(NSURL *)url metadata:(NSDictionary *)metadata tags:(NSArray<NSDictionary *> *)tags;
+- (void)sendSubCameraCommand:(NSString *)command;
 @end

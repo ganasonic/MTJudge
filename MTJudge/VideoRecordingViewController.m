@@ -8,6 +8,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <Vision/Vision.h>
 #import "SkeletonConnections.h"
+#import "WaterJump/WaterJumpReceivedPlayerViewController.h"
 #import <QuartzCore/QuartzCore.h>
 
 // トラックの任意の位置へのタップと、そのままのドラッグに対応する。
@@ -87,9 +88,29 @@
 @property (nonatomic, assign) BOOL scrubbing;
 @property (nonatomic, assign) BOOL seeking;
 @property (nonatomic, assign) CMTime requestedSeekTime;
+@property (nonatomic, assign) CMTime loopStartTime;
+@property (nonatomic, assign) CMTime loopEndTime;
+@property (nonatomic, assign) BOOL loopEnabled;
+@property (nonatomic, assign) BOOL mirroredPlayback;
+@property (nonatomic, strong) UIButton *loopStartButton;
+@property (nonatomic, strong) UIButton *loopEndButton;
+@property (nonatomic, strong) UIButton *loopButton;
+@property (nonatomic, strong) UIButton *frameStepButton;
+@property (nonatomic, strong) UIButton *mirrorButton;
+@property (nonatomic, strong) NSDictionary *pendingAutomaticMetadata;
+@property (nonatomic, strong) UIButton *takeoffButton;
 @end
 
 @implementation VideoRecordingViewController
+
+- (void)toggleLocalTakeoff:(id)sender {
+    if (!self.latestRecordingURL || !self.player) return;
+    NSURL *url = self.latestRecordingURL;
+    [self stopPlayback];
+    WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url];
+    player.modalPresentationStyle = UIModalPresentationFullScreen;
+    [self presentViewController:player animated:YES completion:nil];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -110,6 +131,9 @@
     };
 
     [WaterJumpCoordinator shared].recording = self.recordingController;
+    self.recordingController.remoteCommand = ^(NSString *command) {
+        [[WaterJumpCoordinator shared] sendSubCameraCommand:command];
+    };
     [[WaterJumpCoordinator shared] applySettings];
 
     // カメラセッションの初期化中も白いStoryboard背景を表示しない。
@@ -195,17 +219,24 @@
             return;
         }
         if (self.recordingController.automaticRecording) {
-            [[WaterJumpCoordinator shared] saveAutomatic:outputFileURL completion:^(NSURL *saved, NSError *saveError) {
+            [[WaterJumpCoordinator shared] saveAutomatic:outputFileURL completion:^(NSURL *saved, NSDictionary *metadata, NSError *saveError) {
+                BOOL isSubCamera = [[[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraRole"] isEqualToString:@"SUB_CAMERA"];
                 if (saved) {
                     self.latestRecordingURL = saved;
                     [[NSUserDefaults standardUserDefaults] setObject:saved.path forKey:@"LatestCameraRecordingPath"];
                     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
-                    [self.recordingController markSaved];
+                    if (!isSubCamera && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTagBeforeTransfer"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"]) {
+                        self.pendingAutomaticMetadata = metadata;
+                        self.pendingRecordingURL = saved;
+                        [self presentRecordingReview];
+                    } else {
+                        [self.recordingController markSaved];
+                    }
                 } else {
                     self.latestRecordingURL = outputFileURL;
                     self.pendingRecordingURL = outputFileURL;
                     [self.recordingController finishedWithError:saveError];
-                    [self presentRecordingReview];
+                    if (!isSubCamera) [self presentRecordingReview];
                 }
                 [self updateCameraControls];
             }];
@@ -248,7 +279,7 @@
         typeof(self) self = weakSelf;
         if (!self) return;
         NSError *error = nil;
-        if (selections.count) {
+        if (selections.count && !self.pendingAutomaticMetadata) {
             NSMutableArray *names = [NSMutableArray array];
             NSCharacterSet *unsafe = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r"];
             for (NSDictionary *selection in selections) {
@@ -266,7 +297,7 @@
                 // カテゴリ名とタグIDも動画に関連付けてアプリ内に保持する。
                 [[NSUserDefaults standardUserDefaults] setObject:selections forKey:@"LatestCameraRecordingTags"];
             }
-        } else {
+        } else if (!self.pendingAutomaticMetadata) {
             NSURL *untaggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"mov"]];
             if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:untaggedURL error:&error]) {
                 self.pendingRecordingURL = untaggedURL;
@@ -279,6 +310,15 @@
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"タグを保存できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [self.presentedViewController presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+        if (self.pendingAutomaticMetadata) {
+            [[WaterJumpCoordinator shared] enqueueAutomaticVideoURL:self.pendingRecordingURL metadata:self.pendingAutomaticMetadata tags:selections];
+            self.pendingAutomaticMetadata = nil;
+            self.pendingRecordingURL = nil;
+            [self.recordingController markSaved];
+            [self updateCameraControls];
+            [self dismissViewControllerAnimated:YES completion:nil];
             return;
         }
         if (exportVideo) {
@@ -642,6 +682,13 @@
     panel.clipsToBounds = YES;
     [self.view addSubview:panel];
     self.recordButton = [self cameraButtonWithAction:@selector(recordButtonTapped:)];
+    // cameraButtonWithActionの共通44pt制約をシャッター用の56ptへ変更し、
+    // 外周と高さを一致させて楕円にならないようにする。
+    for (NSLayoutConstraint *constraint in self.recordButton.constraints) {
+        if (constraint.firstAttribute == NSLayoutAttributeWidth || constraint.firstAttribute == NSLayoutAttributeHeight) constraint.constant = 56.0;
+    }
+    self.recordButton.layer.cornerRadius = 28.0;
+    self.recordButton.clipsToBounds = YES;
     self.recordingActivity = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
     self.recordingActivity.translatesAutoresizingMaskIntoConstraints = NO;
     self.recordingActivity.hidesWhenStopped = YES;
@@ -656,7 +703,17 @@
     self.guideButton = [self cameraButtonWithAction:@selector(toggleGuide:)];
     self.deleteButton = [self cameraButtonWithAction:@selector(deleteLatestRecording:)];
     self.saveButton = [self cameraButtonWithAction:@selector(presentRecordingSavePicker)];
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.recordButton, self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.deleteButton, self.saveButton]];
+    // 録画ボタンだけはシャッター操作に近い右側中央へ独立配置する。
+    // その他の既存操作は従来どおり画面下部のスタックに残す。
+    self.recordButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.recordButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.recordButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+        [self.recordButton.centerYAnchor constraintEqualToAnchor:self.previewView.centerYAnchor],
+        [self.recordButton.widthAnchor constraintEqualToConstant:56],
+        [self.recordButton.heightAnchor constraintEqualToConstant:56]
+    ]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.deleteButton, self.saveButton]];
     stack.axis = UILayoutConstraintAxisHorizontal;
     stack.spacing = 4;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -696,6 +753,8 @@
     self.guideView.hidden = !self.guideEnabled || playing;
     UIColor *neutral = [UIColor colorWithWhite:0.22 alpha:0.95];
     [self styleButton:self.recordButton title:recording ? @"録画停止" : @"録画開始" symbol:recording ? @"stop.fill" : @"record.circle" color:UIColor.systemRedColor];
+    self.recordButton.backgroundColor = [[UIColor colorWithRed:0.88 green:0.03 blue:0.03 alpha:1.0] colorWithAlphaComponent:0.82];
+    self.recordButton.alpha = self.recordButton.enabled ? 0.98 : 0.35;
     if (self.finishingRecording) {
         [self.recordButton setImage:nil forState:UIControlStateNormal];
         self.recordButton.accessibilityLabel = @"録画した動画を処理中";
@@ -895,9 +954,20 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackFailed:) name:AVPlayerItemFailedToPlayToEndTimeNotification object:item];
     [item addObserver:self forKeyPath:@"status" options:NSKeyValueObservingOptionNew context:NULL];
     self.requestedSeekTime = kCMTimeInvalid;
+    self.loopStartTime = kCMTimeInvalid;
+    self.loopEndTime = kCMTimeInvalid;
+    self.loopEnabled = NO;
+    self.mirroredPlayback = NO;
     [self updatePlaybackProgress];
     __weak typeof(self) weakSelf = self;
     self.playbackTimeObserver = [self.player addPeriodicTimeObserverForInterval:CMTimeMake(1, 10) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
+        if (weakSelf.loopEnabled && CMTIME_IS_VALID(weakSelf.loopStartTime) && CMTIME_IS_VALID(weakSelf.loopEndTime) && CMTimeCompare(weakSelf.loopEndTime, weakSelf.loopStartTime) > 0 && CMTimeCompare(time, weakSelf.loopEndTime) >= 0 && !weakSelf.seeking) {
+            AVPlayer *loopPlayer = weakSelf.player;
+            weakSelf.seeking = YES;
+            [loopPlayer seekToTime:weakSelf.loopStartTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+                dispatch_async(dispatch_get_main_queue(), ^{ if (weakSelf.player == loopPlayer) { weakSelf.seeking = NO; loopPlayer.rate = weakSelf.playbackSpeed; } });
+            }];
+        }
         [weakSelf updatePlaybackProgress];
     }];
     self.player.rate = self.playbackSpeed;
@@ -934,6 +1004,11 @@
     self.scrubbing = NO;
     self.seeking = NO;
     self.requestedSeekTime = kCMTimeInvalid;
+    self.loopEnabled = NO;
+    self.loopStartTime = kCMTimeInvalid;
+    self.loopEndTime = kCMTimeInvalid;
+    self.mirroredPlayback = NO;
+    self.playerLayer.affineTransform = CGAffineTransformIdentity;
     if (self.player) {
         [self.player.currentItem removeObserver:self forKeyPath:@"status"];
         [[NSNotificationCenter defaultCenter] removeObserver:self name:AVPlayerItemDidPlayToEndTimeNotification object:self.player.currentItem];
@@ -995,7 +1070,18 @@
     }
     [self.positionSlider.heightAnchor constraintEqualToConstant:44].active = YES;
     [self.speedSlider.heightAnchor constraintEqualToConstant:44].active = YES;
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[position, speed]];
+    self.loopStartButton = [self playbackFeatureButtonWithSymbol:@"a.circle" action:@selector(setLoopStart:) label:@"A点を設定"];
+    self.loopEndButton = [self playbackFeatureButtonWithSymbol:@"b.circle" action:@selector(setLoopEnd:) label:@"B点を設定"];
+    self.loopButton = [self playbackFeatureButtonWithSymbol:@"repeat" action:@selector(toggleLoop:) label:@"A-Bリピート"];
+    self.frameStepButton = [self playbackFeatureButtonWithSymbol:@"forward.frame" action:@selector(stepOneFrame:) label:@"1フレーム進む"];
+    self.mirrorButton = [self playbackFeatureButtonWithSymbol:@"arrow.left.and.right.righttriangle.left.righttriangle.right" action:@selector(toggleMirror:) label:@"左右反転"];
+    self.takeoffButton = [self playbackFeatureButtonWithSymbol:@"figure.skiing.downhill" action:@selector(toggleLocalTakeoff:) label:@"Takeoff解析設定"];
+    UIStackView *features = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.frameStepButton, self.mirrorButton, self.takeoffButton]];
+    features.axis = UILayoutConstraintAxisHorizontal;
+    features.alignment = UIStackViewAlignmentCenter;
+    features.distribution = UIStackViewDistributionEqualSpacing;
+    features.spacing = 5;
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[position, speed, features]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.playbackControls.contentView addSubview:stack];
@@ -1070,6 +1156,87 @@
             }
         });
     }];
+}
+
+
+- (UIButton *)playbackFeatureButtonWithSymbol:(NSString *)symbol action:(SEL)action label:(NSString *)label {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.tintColor = UIColor.whiteColor;
+    button.accessibilityLabel = label;
+    button.accessibilityIdentifier = label;
+    button.layer.cornerRadius = 8;
+    button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
+    [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    [button.widthAnchor constraintEqualToConstant:44].active = YES;
+    [button.heightAnchor constraintEqualToConstant:36].active = YES;
+    return button;
+}
+
+- (void)refreshPlaybackFeatureButtons {
+    self.loopStartButton.accessibilityValue = CMTIME_IS_VALID(self.loopStartTime) ? [NSString stringWithFormat:@"A %.2f秒", CMTimeGetSeconds(self.loopStartTime)] : @"未設定";
+    self.loopEndButton.accessibilityValue = CMTIME_IS_VALID(self.loopEndTime) ? [NSString stringWithFormat:@"B %.2f秒", CMTimeGetSeconds(self.loopEndTime)] : @"未設定";
+    self.loopButton.selected = self.loopEnabled;
+    self.loopButton.backgroundColor = self.loopEnabled ? [UIColor.systemBlueColor colorWithAlphaComponent:0.5] : [UIColor colorWithWhite:0 alpha:0.25];
+    self.mirrorButton.selected = self.mirroredPlayback;
+    self.mirrorButton.backgroundColor = self.mirroredPlayback ? [UIColor.systemBlueColor colorWithAlphaComponent:0.5] : [UIColor colorWithWhite:0 alpha:0.25];
+}
+
+- (void)setLoopStart:(id)sender {
+    if (!self.player) return;
+    self.loopStartTime = self.player.currentTime;
+    if (CMTIME_IS_VALID(self.loopEndTime) && CMTimeCompare(self.loopEndTime, self.loopStartTime) <= 0) {
+        self.loopEndTime = kCMTimeInvalid;
+        self.loopEnabled = NO;
+    }
+    [self refreshPlaybackFeatureButtons];
+}
+
+- (void)setLoopEnd:(id)sender {
+    if (!self.player || !CMTIME_IS_VALID(self.loopStartTime)) return;
+    CMTime current = self.player.currentTime;
+    if (CMTimeCompare(current, self.loopStartTime) <= 0) {
+        self.loopEnabled = NO;
+        [self refreshPlaybackFeatureButtons];
+        return;
+    }
+    self.loopEndTime = current;
+    self.loopEnabled = YES;
+    [self refreshPlaybackFeatureButtons];
+}
+
+- (void)toggleLoop:(id)sender {
+    if (!CMTIME_IS_VALID(self.loopStartTime) || !CMTIME_IS_VALID(self.loopEndTime) || CMTimeCompare(self.loopEndTime, self.loopStartTime) <= 0) {
+        self.loopEnabled = NO;
+    } else {
+        self.loopEnabled = !self.loopEnabled;
+    }
+    [self refreshPlaybackFeatureButtons];
+}
+
+- (CMTime)videoFrameDuration {
+    AVAsset *asset = self.player.currentItem.asset;
+    AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    CMTime duration = track.minFrameDuration;
+    if (CMTIME_IS_VALID(duration) && duration.value > 0) return duration;
+    float fps = track.nominalFrameRate;
+    if (fps <= 0) fps = 30.0f;
+    return CMTimeMakeWithSeconds(1.0 / fps, 600);
+}
+
+- (void)stepOneFrame:(id)sender {
+    if (!self.player) return;
+    [self.player pause];
+    CMTime next = CMTimeAdd(self.player.currentTime, [self videoFrameDuration]);
+    CMTime duration = self.player.currentItem.duration;
+    if (CMTIME_IS_VALID(duration) && CMTimeCompare(next, duration) > 0) next = duration;
+    [self.player seekToTime:next toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
+}
+
+- (void)toggleMirror:(id)sender {
+    self.mirroredPlayback = !self.mirroredPlayback;
+    self.playerLayer.affineTransform = self.mirroredPlayback ? CGAffineTransformMakeScale(-1, 1) : CGAffineTransformIdentity;
+    [self refreshPlaybackFeatureButtons];
 }
 
 - (void)endScrubbing {

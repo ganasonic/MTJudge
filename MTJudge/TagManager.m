@@ -49,6 +49,20 @@
     [self saveTags];
 }
 
+- (void)rememberLastSelectedItemId:(NSString *)itemId forTag:(Tag *)tag {
+    if (!tag || ![self.tags containsObject:tag]) return;
+    tag.defaultTagItemId = itemId.length ? itemId : nil;
+    [self saveTags];
+}
+
+- (NSString *)lastSelectedItemIdForTag:(Tag *)tag {
+    if (!tag || ![self.tags containsObject:tag]) return nil;
+    for (TagItem *item in tag.tagItems) {
+        if ([item.tagItemId isEqualToString:tag.defaultTagItemId]) return tag.defaultTagItemId;
+    }
+    return nil;
+}
+
 #pragma mark - Data Persistence
 
 // タグデータを保存するファイルパスを取得

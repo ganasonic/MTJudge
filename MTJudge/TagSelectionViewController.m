@@ -51,6 +51,18 @@
             }
         }
     }
+    // 新しい録画でまだ選択値が渡されていない場合は、カテゴリごとの直前の選択を復元する。
+    for (Tag *category in self.categories) {
+        if ([self selectedIDForCategory:category]) continue;
+        NSString *lastID = [[TagManager sharedManager] lastSelectedItemIdForTag:category];
+        if (!lastID.length) continue;
+        for (TagItem *item in category.tagItems) {
+            if ([item.tagItemId isEqualToString:lastID]) {
+                [valid addObject:@{ @"category": category.tagName ?: @"", @"id": item.tagItemId, @"name": item.itemName ?: @"" }];
+                break;
+            }
+        }
+    }
     self.selections = valid;
     [self.navigationController setToolbarHidden:NO animated:NO];
     [self.tableView reloadData];
@@ -111,6 +123,10 @@
     if (indexPath.row > 0) {
         TagItem *item = category.tagItems[indexPath.row - 1];
         [updated addObject:@{@"category": category.tagName ?: @"", @"id": item.tagItemId ?: @"", @"name": item.itemName ?: @""}];
+        [[TagManager sharedManager] rememberLastSelectedItemId:item.tagItemId forTag:category];
+    } else {
+        // 「タグなし」もカテゴリ単位の最後の選択として保存する。
+        [[TagManager sharedManager] rememberLastSelectedItemId:nil forTag:category];
     }
     self.selections = updated;
     [tableView reloadData];

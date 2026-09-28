@@ -7,6 +7,7 @@
 @property (nonatomic, readonly) BOOL automaticRecording;
 @property (nonatomic, copy) BOOL (^canStart)(void);
 @property (nonatomic, copy) void (^changed)(void);
+@property (nonatomic, copy) void (^remoteCommand)(NSString *command);
 - (instancetype)initWithRecorder:(VideoRecorder *)recorder;
 - (BOOL)startAutomatic:(BOOL)automatic error:(NSError **)error;
 @property (nonatomic) NSTimeInterval duration;

@@ -7,6 +7,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WaterJumpReceivedPlayerViewController : AVPlayerViewController
 - (instancetype)initWithVideoURL:(NSURL *)url;
 - (void)replaceVideoURL:(NSURL *)url;
+- (void)setPlaylist:(NSArray<NSURL *> *)playlist currentIndex:(NSInteger)index;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -47,6 +47,13 @@
 
     // キャプチャセッションの設定を開始
     [_captureSession beginConfiguration];
+    // iPad Pro 10.5インチを含む旧端末では、暗黙のプリセット選択で
+    // MovieFileOutputの映像接続が確立しない場合があるため、対応確認して明示する。
+    if ([_captureSession canSetSessionPreset:AVCaptureSessionPresetHigh]) {
+        _captureSession.sessionPreset = AVCaptureSessionPresetHigh;
+    } else if ([_captureSession canSetSessionPreset:AVCaptureSessionPresetMedium]) {
+        _captureSession.sessionPreset = AVCaptureSessionPresetMedium;
+    }
     
     // 既存の入力と出力を削除
     for (AVCaptureInput *input in _captureSession.inputs) {
@@ -65,6 +72,9 @@
             videoDevice = [AVCaptureDevice defaultDeviceWithDeviceType:type mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionBack];
             if (videoDevice) break;
         }
+    }
+    if (!videoDevice) {
+        if (@available(iOS 10.0, *)) videoDevice = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionBack];
     }
     if (!videoDevice) videoDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     // 取得したvideoDevice（背面カメラ）を使って、新しいビデオ入力オブジェクトを作成している
@@ -207,7 +217,10 @@
 #pragma mark - Recording Control
 
 // 録画の開始
-- (BOOL)readyForRecording { return self.captureSession.isRunning && self.cameraDevice != nil && !self.captureSession.isInterrupted; }
+- (BOOL)readyForRecording {
+    AVCaptureConnection *videoConnection = [self.movieFileOutput connectionWithMediaType:AVMediaTypeVideo];
+    return self.captureSession.isRunning && self.cameraDevice != nil && videoConnection != nil && videoConnection.enabled && !self.captureSession.isInterrupted;
+}
 
 - (void)startRecording {
     NSLog(@"startRecording @VideoRecorder");
@@ -219,9 +232,28 @@
     
     // 録画の設定
     AVCaptureConnection *movieConnection = [_movieFileOutput connectionWithMediaType:AVMediaTypeVideo];
+    if (!movieConnection || !movieConnection.enabled) {
+        NSLog(@"[Recording] video connection is unavailable; refusing to create audio-only movie");
+        return;
+    }
     // AVCaptureConnectionオブジェクト（movieConnection）を使って、録画の映像の向きを縦向き（ポートレートモード）に設定
     if (movieConnection) {
         movieConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
+        // 端末が対応する最も高品質な動画手ぶれ補正を選び、未対応なら段階的にフォールバックする。
+        // プレビュー表示ではなく録画接続へ設定するため、保存動画にも適用される。
+        NSArray<NSNumber *> *stabilizationModes = @[
+            @(AVCaptureVideoStabilizationModeCinematicExtended),
+            @(AVCaptureVideoStabilizationModeCinematic),
+            @(AVCaptureVideoStabilizationModeStandard),
+            @(AVCaptureVideoStabilizationModeOff)
+        ];
+        for (NSNumber *value in stabilizationModes) {
+            AVCaptureVideoStabilizationMode mode = (AVCaptureVideoStabilizationMode)value.integerValue;
+            if (movieConnection.supportsVideoStabilization && [self.cameraDevice.activeFormat isVideoStabilizationModeSupported:mode]) {
+                movieConnection.preferredVideoStabilizationMode = mode;
+                break;
+            }
+        }
     }
     
     // 録画ファイルの保存先URLを一時ディレクトリに設定

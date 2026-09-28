@@ -29,7 +29,7 @@ import CryptoKit
             let fourcc = CMFormatDescriptionGetMediaSubType(format as! CMFormatDescription)
             codec = String(bytes: [UInt8((fourcc >> 24) & 255), UInt8((fourcc >> 16) & 255), UInt8((fourcc >> 8) & 255), UInt8(fourcc & 255)], encoding: .ascii) ?? "unknown"
         }
-        return ["version":1, "id":id, "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
+        return ["version":1, "id":id, "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
                 "width":abs(track.naturalSize.width), "height":abs(track.naturalSize.height), "fps":track.nominalFrameRate,
                 "bitrate":track.estimatedDataRate, "codec":codec, "created":Date().timeIntervalSince1970]
     }
@@ -61,8 +61,18 @@ import CryptoKit
     @objc public static func saveAutomatic(_ source: URL, completion: @escaping (URL?, [String: Any]?, NSError?) -> Void) {
         io.async {
             do {
-                var info = try metadata(source, id: UUID().uuidString, tags: [])
-                info["transferRequested"] = UserDefaults.standard.bool(forKey:"WJTransfer")
+                // AVCaptureMovieFileOutputの完了通知直後は、端末によってAVAssetの
+                // トラック情報が読み出せるまでわずかな遅延がある。特にリモート停止
+                // されたサブカメラで発生しやすいため、保存処理を数回リトライする。
+                var info: [String: Any]?
+                var lastError: Error?
+                for _ in 0..<8 {
+                    do { info = try metadata(source, id: UUID().uuidString, tags: []); break }
+                    catch { lastError = error; Thread.sleep(forTimeInterval: 0.25) }
+                }
+                guard var info = info else { throw lastError ?? failure("動画ファイルを読み込めません。元動画は保持しています。") }
+                let isSubCamera = (info["cameraRole"] as? String) == "SUB_CAMERA"
+                info["transferRequested"] = UserDefaults.standard.bool(forKey:"WJTransfer") && (isSubCamera || !UserDefaults.standard.bool(forKey:"WJTagBeforeTransfer"))
                 info["peer"] = UserDefaults.standard.string(forKey:"WJPeerID") ?? ""
                 let saved = try commit(source, metadata: info)
                 // The temporary original is intentionally retained if any operation fails.
