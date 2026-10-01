@@ -91,6 +91,13 @@
     if (!self.automaticRecording || ![self.state isEqual:@"RECORDING"]) return;
     [self.timer invalidate];
     __weak typeof(self) weakSelf = self;
+    // duration == 0 は設定画面の「ー（手動停止）」。
+    if (self.duration <= 0) {
+#if DEBUG
+        NSLog(@"[Recording] manual stop mode");
+#endif
+        return;
+    }
     NSTimeInterval duration = [@[@10,@15,@20,@30,@45,@60] containsObject:@(self.duration)] ? self.duration : 20;
     self.timer = [NSTimer timerWithTimeInterval:duration repeats:NO block:^(NSTimer *timer) { [weakSelf stop]; }];
     [[NSRunLoop mainRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];

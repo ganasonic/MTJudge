@@ -81,7 +81,36 @@ import CryptoKit
         }
     }
     @objc public static func videos() -> [URL] {
+        // 旧バージョンの自動録画先を、現在の受信動画と同じRecordingsへ移行する。
+        let legacy = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CameraRecordings", isDirectory: true)
+        if let oldFiles = try? FileManager.default.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil) {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for old in oldFiles where old.pathExtension == "mov" {
+                let target = directory.appendingPathComponent(old.lastPathComponent)
+                if !FileManager.default.fileExists(atPath: target.path) {
+                    try? FileManager.default.moveItem(at: old, to: target)
+                    for suffix in ["wj.json", "tags.json", "pose.json"] {
+                        let sidecar = old.appendingPathExtension(suffix)
+                        let targetSidecar = target.appendingPathExtension(suffix)
+                        if FileManager.default.fileExists(atPath: sidecar.path) { try? FileManager.default.moveItem(at: sidecar, to: targetSidecar) }
+                    }
+                }
+            }
+        }
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])) ?? []
-        return files.filter { $0.pathExtension == "mov" }.sorted { ((try? $0.resourceValues(forKeys:[.creationDateKey]).creationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys:[.creationDateKey]).creationDate) ?? .distantPast) }
+        let videos = files.filter { $0.pathExtension == "mov" }
+        for video in videos {
+            let sidecar = video.appendingPathExtension("wj.json")
+            if !FileManager.default.fileExists(atPath: sidecar.path), let info = try? metadata(video, id: UUID().uuidString, tags: []) {
+                var repaired = info
+                let created = (try? video.resourceValues(forKeys: [.creationDateKey]).creationDate)?.timeIntervalSince1970 ?? Date().timeIntervalSince1970
+                repaired["created"] = created
+                repaired["cameraRole"] = "MAIN_CAMERA"
+                repaired["sessionID"] = UserDefaults.standard.string(forKey: "WJSessionID") ?? repaired["id"]!
+                if let data = try? JSONSerialization.data(withJSONObject: repaired) { try? data.write(to: sidecar, options: .atomic) }
+                if let tags = try? JSONSerialization.data(withJSONObject: [], options: .sortedKeys) { try? tags.write(to: video.appendingPathExtension("tags.json"), options: .atomic) }
+            }
+        }
+        return videos.sorted { ((try? $0.resourceValues(forKeys:[.creationDateKey]).creationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys:[.creationDateKey]).creationDate) ?? .distantPast) }
     }
 }

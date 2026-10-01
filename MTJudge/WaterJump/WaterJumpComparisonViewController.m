@@ -21,6 +21,8 @@
 @property (nonatomic, strong) UIButton *frameButton;
 @property (nonatomic, strong) UIButton *mainMirrorButton;
 @property (nonatomic, strong) UIButton *subMirrorButton;
+@property (nonatomic, strong) UIButton *shareButton;
+@property (nonatomic, strong) UIButton *favoriteButton;
 @property (nonatomic, assign) CMTime loopStart;
 @property (nonatomic, assign) CMTime loopEnd;
 @property (nonatomic, assign) BOOL loopEnabled;
@@ -56,13 +58,15 @@
     [self.speedSlider addTarget:self action:@selector(speedChanged:) forControlEvents:UIControlEventValueChanged];
     self.playButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; self.playButton.tintColor = UIColor.whiteColor; [self.playButton addTarget:self action:@selector(togglePlay:) forControlEvents:UIControlEventTouchUpInside];
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem]; [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill"] forState:UIControlStateNormal]; close.tintColor = UIColor.whiteColor; [close addTarget:self action:@selector(close) forControlEvents:UIControlEventTouchUpInside];
+    self.shareButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.shareButton setImage:[UIImage systemImageNamed:@"square.and.arrow.up"] forState:UIControlStateNormal]; self.shareButton.tintColor = UIColor.whiteColor; [self.shareButton addTarget:self action:@selector(shareVideos:) forControlEvents:UIControlEventTouchUpInside];
+    self.favoriteButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.favoriteButton setImage:[UIImage systemImageNamed:@"heart"] forState:UIControlStateNormal]; self.favoriteButton.tintColor = UIColor.whiteColor; [self.favoriteButton addTarget:self action:@selector(toggleFavorites:) forControlEvents:UIControlEventTouchUpInside];
     self.aButton = [self featureButton:@"A" action:@selector(setA:)];
     self.bButton = [self featureButton:@"B" action:@selector(setB:)];
     self.loopButton = [self featureButton:@"↻" action:@selector(toggleLoop:)];
     self.frameButton = [self featureButton:@"▸|" action:@selector(stepFrame:)];
     self.mainMirrorButton = [self featureButton:@"M1" action:@selector(toggleMainMirror:)];
     self.subMirrorButton = [self featureButton:@"M2" action:@selector(toggleSubMirror:)];
-    for (UIView *view in @[self.positionSlider, self.speedSlider, self.playButton, close, self.aButton, self.bButton, self.loopButton, self.frameButton, self.mainMirrorButton, self.subMirrorButton]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
+    for (UIView *view in @[self.positionSlider, self.speedSlider, self.playButton, close, self.shareButton, self.favoriteButton, self.aButton, self.bButton, self.loopButton, self.frameButton, self.mainMirrorButton, self.subMirrorButton]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
     self.positionSlider.accessibilityLabel = @"比較再生位置"; self.speedSlider.accessibilityLabel = @"比較再生速度";
     [NSLayoutConstraint activateConstraints:@[
         [self.mainLabel.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:12], [self.mainLabel.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
@@ -76,7 +80,9 @@
         [self.mainMirrorButton.leadingAnchor constraintEqualToAnchor:self.frameButton.trailingAnchor constant:6], [self.mainMirrorButton.centerYAnchor constraintEqualToAnchor:self.aButton.centerYAnchor],
         [self.subMirrorButton.leadingAnchor constraintEqualToAnchor:self.mainMirrorButton.trailingAnchor constant:6], [self.subMirrorButton.centerYAnchor constraintEqualToAnchor:self.aButton.centerYAnchor],
         [self.playButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor], [self.playButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-4], [self.playButton.widthAnchor constraintEqualToConstant:44], [self.playButton.heightAnchor constraintEqualToConstant:36],
-        [close.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [close.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4], [close.widthAnchor constraintEqualToConstant:44], [close.heightAnchor constraintEqualToConstant:44]
+        [close.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [close.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4], [close.widthAnchor constraintEqualToConstant:44], [close.heightAnchor constraintEqualToConstant:44],
+        [self.favoriteButton.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-4], [self.favoriteButton.topAnchor constraintEqualToAnchor:close.topAnchor], [self.favoriteButton.widthAnchor constraintEqualToConstant:44], [self.favoriteButton.heightAnchor constraintEqualToConstant:44],
+        [self.shareButton.trailingAnchor constraintEqualToAnchor:self.favoriteButton.leadingAnchor constant:-4], [self.shareButton.topAnchor constraintEqualToAnchor:close.topAnchor], [self.shareButton.widthAnchor constraintEqualToConstant:44], [self.shareButton.heightAnchor constraintEqualToConstant:44]
     ]];
     __weak typeof(self) weakSelf = self;
     self.observer = [self.mainPlayer addPeriodicTimeObserverForInterval:CMTimeMake(1, 10) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) { [weakSelf updatePosition]; }];
@@ -101,5 +107,7 @@
 - (void)toggleMainMirror:(id)sender { self.mainMirrored = !self.mainMirrored; self.mainLayer.affineTransform = self.mainMirrored ? CGAffineTransformMakeScale(-1, 1) : CGAffineTransformIdentity; [self.mainMirrorButton setTitle:(self.mainMirrored ? @"M1✓" : @"M1") forState:UIControlStateNormal]; }
 - (void)toggleSubMirror:(id)sender { self.subMirrored = !self.subMirrored; self.subLayer.affineTransform = self.subMirrored ? CGAffineTransformMakeScale(-1, 1) : CGAffineTransformIdentity; [self.subMirrorButton setTitle:(self.subMirrored ? @"M2✓" : @"M2") forState:UIControlStateNormal]; }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)shareVideos:(id)sender { UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[self.mainURL, self.subURL] applicationActivities:nil]; if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = sender; activity.popoverPresentationController.sourceRect = [sender bounds]; } [self presentViewController:activity animated:YES completion:nil]; }
+- (void)toggleFavorites:(id)sender { NSMutableArray *paths = [NSMutableArray arrayWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] ?: @[]]; BOOL selected = [paths containsObject:self.mainURL.path] && [paths containsObject:self.subURL.path]; if (selected) { [paths removeObject:self.mainURL.path]; [paths removeObject:self.subURL.path]; } else { if (![paths containsObject:self.mainURL.path]) [paths addObject:self.mainURL.path]; if (![paths containsObject:self.subURL.path]) [paths addObject:self.subURL.path]; } [[NSUserDefaults standardUserDefaults] setObject:paths forKey:@"WJFavoriteVideoPaths"]; [self.favoriteButton setImage:[UIImage systemImageNamed:(selected ? @"heart" : @"heart.fill")] forState:UIControlStateNormal]; self.favoriteButton.tintColor = selected ? UIColor.whiteColor : UIColor.systemPinkColor; }
 - (void)dealloc { if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; }
 @end

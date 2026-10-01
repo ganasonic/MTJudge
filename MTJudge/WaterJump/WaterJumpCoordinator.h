@@ -22,4 +22,5 @@ extern NSString * const WJStatusChanged;
 - (void)saveAutomatic:(NSURL *)url completion:(void (^)(NSURL *, NSDictionary *, NSError *))completion;
 - (void)enqueueAutomaticVideoURL:(NSURL *)url metadata:(NSDictionary *)metadata tags:(NSArray<NSDictionary *> *)tags;
 - (void)sendSubCameraCommand:(NSString *)command;
+- (void)considerLocalMainRecordingURL:(NSURL *)url;
 @end

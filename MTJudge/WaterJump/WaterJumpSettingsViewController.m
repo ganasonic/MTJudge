@@ -2,15 +2,73 @@
 #import "WaterJumpCoordinator.h"
 #import "MTJudge-Swift.h"
 #import "WaterJumpReceivedPlayerViewController.h"
+#import "WaterJumpComparisonViewController.h"
 #import <AVKit/AVKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-@interface WJVideoLibrary : UITableViewController
+@interface WJVideoLibrary : UITableViewController <UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) NSArray<NSURL *> *videos;
+@property (nonatomic, strong) NSURL *selectedMainURL;
+@property (nonatomic, strong) NSURL *selectedSubURL;
 @end
 @implementation WJVideoLibrary
-- (void)viewDidLoad { [super viewDidLoad]; self.title = @"練習動画"; [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoDeleted" object:nil]; [self refreshVideos]; }
-- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WJVideoDeleted" object:nil]; }
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"練習動画";
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectComparisonVideo:)];
+    longPress.minimumPressDuration = .55;
+    longPress.cancelsTouchesInView = YES;
+    [self.tableView addGestureRecognizer:longPress];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoDeleted" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoSaved" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoFavoritesChanged" object:nil];
+    [self refreshVideos];
+}
+- (void)beginMultiSelect {
+    self.editing = YES;
+    self.tableView.allowsMultipleSelectionDuringEditing = YES;
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(endMultiSelect)];
+    UIBarButtonItem *share = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(shareSelectedVideos)];
+    UIBarButtonItem *delete = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash target:self action:@selector(deleteSelectedVideos)];
+    delete.tintColor = UIColor.systemRedColor;
+    self.navigationItem.rightBarButtonItems = @[delete, share];
+}
+- (void)endMultiSelect {
+    self.editing = NO;
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
+    self.navigationItem.rightBarButtonItems = @[[[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)]];
+}
+- (NSArray<NSURL *> *)selectedVideoURLs {
+    NSMutableArray *urls = [NSMutableArray array];
+    for (NSIndexPath *indexPath in self.tableView.indexPathsForSelectedRows ?: @[]) {
+        if (indexPath.row < self.videos.count) [urls addObject:self.videos[indexPath.row]];
+    }
+    return urls;
+}
+- (void)shareSelectedVideos {
+    NSArray<NSURL *> *urls = [self selectedVideoURLs];
+    if (!urls.count) return;
+    UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:urls applicationActivities:nil];
+    if (activity.popoverPresentationController) { activity.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItems.lastObject; }
+    [self presentViewController:activity animated:YES completion:nil];
+}
+- (void)deleteSelectedVideos {
+    NSArray<NSURL *> *urls = [self selectedVideoURLs];
+    if (!urls.count) return;
+    NSFileManager *files = NSFileManager.defaultManager;
+    for (NSURL *url in urls) {
+        for (NSString *suffix in @[@"", @".wj.json", @".tags.json", @".pose.json"]) {
+            NSURL *target = suffix.length ? [NSURL fileURLWithPath:[url.path stringByAppendingString:suffix]] : url;
+            [files removeItemAtURL:target error:nil];
+        }
+    }
+    [self endMultiSelect];
+    [self refreshVideos];
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self refreshVideos]; }
 - (void)refreshVideos { if (@available(iOS 13.0, *)) { self.videos = [ReceivedVideoManager videos]; [self.tableView reloadData]; } }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.videos.count; }
@@ -18,9 +76,18 @@
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     NSURL *url = self.videos[indexPath.row];
     NSDictionary *info = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]] ?: [NSData data] options:0 error:nil];
-    NSDate *date = [NSDate dateWithTimeIntervalSince1970:[info[@"created"] doubleValue]];
-    cell.textLabel.text = [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterMediumStyle];
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%.0f秒・%.1f MB・%@ × %@・%@ fps・%@", [info[@"duration"] doubleValue], [info[@"size"] doubleValue]/1048576, info[@"width"] ?: @"?", info[@"height"] ?: @"?", info[@"fps"] ?: @"?", info[@"codec"] ?: @"?"];
+    AVAsset *asset = [AVAsset assetWithURL:url];
+    NSDictionary *fileValues = [url resourceValuesForKeys:@[NSURLCreationDateKey, NSURLFileSizeKey] error:nil];
+    double duration = [info[@"duration"] doubleValue]; if (duration <= 0) duration = CMTimeGetSeconds(asset.duration);
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:[info[@"created"] doubleValue]]; if ([info[@"created"] doubleValue] <= 0) date = fileValues[NSURLCreationDateKey] ?: [NSDate date];
+    AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    NSNumber *size = info[@"size"] ?: fileValues[NSURLFileSizeKey];
+    NSString *width = info[@"width"] ?: [NSString stringWithFormat:@"%.0f", fabs(track.naturalSize.width)];
+    NSString *height = info[@"height"] ?: [NSString stringWithFormat:@"%.0f", fabs(track.naturalSize.height)];
+    NSString *fps = info[@"fps"] ?: [NSString stringWithFormat:@"%.1f", track.nominalFrameRate];
+    NSString *prefix = [url isEqual:self.selectedMainURL] ? @"MAIN  " : ([url isEqual:self.selectedSubURL] ? @"SUB  " : @"");
+    cell.textLabel.text = [prefix stringByAppendingString:[NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterMediumStyle]];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%.0f秒・%.1f MB・%@ × %@・%@ fps・%@", duration, size.doubleValue/1048576, width, height, fps, info[@"codec"] ?: @"?"];
     cell.detailTextLabel.numberOfLines = 0;
     AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:[AVAsset assetWithURL:url]];
     generator.appliesPreferredTrackTransform = YES;
@@ -50,12 +117,40 @@
     [shareButton setImage:[UIImage systemImageNamed:@"square.and.arrow.up"] forState:UIControlStateNormal];
     [shareButton addTarget:self action:@selector(shareVideo:) forControlEvents:UIControlEventTouchUpInside];
     shareButton.frame = CGRectMake(0, 0, 40, 44);
-    UIStackView *actions = [[UIStackView alloc] initWithArrangedSubviews:@[retransferButton, shareButton, deleteButton]];
-    actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 2; actions.frame = CGRectMake(0, 0, 126, 44);
+    UIButton *favoriteButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    favoriteButton.accessibilityIdentifier = url.path;
+    favoriteButton.accessibilityLabel = @"お気に入り";
+    BOOL favorite = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] containsObject:url.path];
+    favoriteButton.tintColor = favorite ? UIColor.systemPinkColor : UIColor.whiteColor;
+    [favoriteButton setImage:[UIImage systemImageNamed:(favorite ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
+    [favoriteButton addTarget:self action:@selector(toggleFavoriteInList:) forControlEvents:UIControlEventTouchUpInside];
+    favoriteButton.frame = CGRectMake(0, 0, 40, 44);
+    UIStackView *actions = [[UIStackView alloc] initWithArrangedSubviews:@[retransferButton, shareButton, favoriteButton, deleteButton]];
+    actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 2; actions.frame = CGRectMake(0, 0, 168, 44);
     cell.accessoryView = actions;
     return cell;
 }
+- (void)selectComparisonVideo:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    CGPoint point = [gesture locationInView:self.tableView];
+    NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:point];
+    if (!indexPath || indexPath.row >= self.videos.count) return;
+    NSURL *url = self.videos[indexPath.row];
+    if ([url isEqual:self.selectedMainURL]) return;
+    if (!self.selectedMainURL) {
+        self.selectedMainURL = url;
+        [self.tableView reloadData];
+        return;
+    }
+    // 1本目はMAINとして保持し、2本目以降の長押しは常にSUBを更新する。
+    self.selectedSubURL = url;
+    [self.tableView reloadData];
+    WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:self.selectedMainURL subURL:self.selectedSubURL];
+    [self presentViewController:comparison animated:YES completion:^{ [comparison startPlayback]; }];
+}
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    // 複数選択モードでは行タップは選択／解除だけにし、動画を再生しない。
+    if (self.editing) return;
     WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:self.videos[indexPath.row]];
     [player setPlaylist:self.videos currentIndex:indexPath.row];
     [self presentViewController:player animated:YES completion:^{ [player.player play]; }];
@@ -98,6 +193,32 @@
     }
     [self presentViewController:activity animated:YES completion:nil];
 }
+- (void)toggleFavoriteInList:(UIButton *)sender {
+    NSString *path = sender.accessibilityIdentifier;
+    if (!path.length) return;
+    NSMutableArray *paths = [NSMutableArray arrayWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] ?: @[]];
+    if ([paths containsObject:path]) [paths removeObject:path]; else [paths addObject:path];
+    [[NSUserDefaults standardUserDefaults] setObject:paths forKey:@"WJFavoriteVideoPaths"];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WJVideoFavoritesChanged" object:[NSURL fileURLWithPath:path]];
+    [self.tableView reloadData];
+}
+- (void)selectPhotoVideo {
+    UIImagePickerController *picker = [UIImagePickerController new];
+    picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+    picker.mediaTypes = @[UTTypeMovie.identifier];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker { [picker dismissViewControllerAnimated:YES completion:nil]; }
+- (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey,id> *)info {
+    NSURL *url = info[UIImagePickerControllerMediaURL];
+    [picker dismissViewControllerAnimated:YES completion:^{
+        if (!url) return;
+        WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url];
+        [player setPlaylist:@[url] currentIndex:0];
+        [self presentViewController:player animated:YES completion:^{ [player.player play]; }];
+    }];
+}
 @end
 
 @implementation WaterJumpSettingsViewController
@@ -113,7 +234,7 @@
 - (void)refresh { [self.tableView reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 9;
+    if (section == 0) return 10;
     if (section == 1) return 6;
     if (section == 2) return 2;
     return [WaterJumpCoordinator shared].discoveredPeers.count;
@@ -129,10 +250,10 @@
     cell.textLabel.numberOfLines = 0; cell.detailTextLabel.numberOfLines = 0;
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
     if (indexPath.section == 0) {
-        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送先でループ再生する", @"ループ再生設定"];
+        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"ループ再生設定"];
         cell.textLabel.text = names[indexPath.row];
-        if (indexPath.row == 3) { cell.accessibilityIdentifier = @"WJDuration"; cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld秒", (long)[[NSUserDefaults standardUserDefaults] integerForKey:@"WJDuration"]]; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
-        else if (indexPath.row == 8) {
+        if (indexPath.row == 3) { cell.accessibilityIdentifier = @"WJDuration"; NSInteger duration = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJDuration"]; cell.detailTextLabel.text = duration > 0 ? [NSString stringWithFormat:@"%ld秒", (long)duration] : @"ー（手動停止）"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
+        else if (indexPath.row == 9) {
             NSInteger count = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJLoopCount"]; if (count == 0) count = 3;
             NSInteger seconds = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJLoopDuration"];
             NSString *countText = count < 0 ? @"無限" : [NSString stringWithFormat:@"%ld回", (long)count];
@@ -140,12 +261,13 @@
             cell.detailTextLabel.text = timeText.length ? [NSString stringWithFormat:@"%@・%@", countText, timeText] : countText;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else {
-            NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJLoopPlayback"];
+            NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback"];
             UISwitch *toggle = [UISwitch new]; toggle.tag = indexPath.row;
             toggle.accessibilityIdentifier = keys[indexPath.row];
             toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:keys[indexPath.row]];
-            toggle.enabled = !manager.recordingBusy && (indexPath.row != 6 || ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"])) && (indexPath.row != 7 || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"]);
-            if ((indexPath.row == 6 || indexPath.row == 7) && !toggle.enabled) toggle.on = NO;
+            BOOL transferOrReceive = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
+            toggle.enabled = !manager.recordingBusy && (indexPath.row != 6 || ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"])) && (indexPath.row != 7 || transferOrReceive) && (indexPath.row != 8 || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]);
+            if ((indexPath.row == 6 || indexPath.row == 8) && !toggle.enabled) toggle.on = NO;
             [toggle addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
     } else if (indexPath.section == 1) {
@@ -164,10 +286,11 @@
     return cell;
 }
 - (void)toggle:(UISwitch *)sender {
-    NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJLoopPlayback"];
+    NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback"];
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults setBool:sender.on forKey:keys[sender.tag]];
     if (sender.tag == 6 && sender.on && (![defaults boolForKey:@"WJMode"] || ![defaults boolForKey:@"WJTransfer"])) [defaults setBool:NO forKey:@"WJTagBeforeTransfer"];
+    if (sender.tag == 7 && !sender.on) [defaults setBool:NO forKey:@"WJLoopPlayback"];
     if (sender.on && sender.tag == 5) { [defaults setBool:NO forKey:@"WJMode"]; [defaults setBool:NO forKey:@"WJTransfer"]; }
     if (sender.on && (sender.tag == 0 || sender.tag == 4)) [defaults setBool:NO forKey:@"WJReceive"];
     [[WaterJumpCoordinator shared] applySettings]; [self refresh];
@@ -177,12 +300,15 @@
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
     if (indexPath.section == 0 && indexPath.row == 3 && !manager.recordingBusy) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画時間" message:nil preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"ー（手動停止）" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [[NSUserDefaults standardUserDefaults] setDouble:0 forKey:@"WJDuration"]; [manager applySettings]; [self refresh];
+        }]];
         for (NSNumber *seconds in @[@10,@15,@20,@30,@45,@60]) [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@秒",seconds] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             [[NSUserDefaults standardUserDefaults] setObject:seconds forKey:@"WJDuration"]; [manager applySettings];
         }]];
         [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil];
     }
-    if (indexPath.section == 0 && indexPath.row == 8 && !manager.recordingBusy) {
+    if (indexPath.section == 0 && indexPath.row == 9 && !manager.recordingBusy) {
         UIAlertController *countAlert = [UIAlertController alertControllerWithTitle:@"ループ再生回数" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
         for (NSNumber *count in @[@3, @5, @10]) {
             [countAlert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@回", count] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [[NSUserDefaults standardUserDefaults] setInteger:count.integerValue forKey:@"WJLoopCount"]; [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"WJLoopDuration"]; [self refresh]; }]];

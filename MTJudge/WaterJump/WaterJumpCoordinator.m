@@ -17,6 +17,39 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 @property (nonatomic, strong) WaterJumpComparisonViewController *comparisonPlayer;
 @end
 @implementation WaterJumpCoordinator
+- (UIViewController *)activePresentationHost {
+    UIViewController *root = nil;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class] || scene.activationState == UISceneActivationStateUnattached) continue;
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                if (window.isKeyWindow) { root = window.rootViewController; break; }
+            }
+            if (!root) root = ((UIWindowScene *)scene).windows.firstObject.rootViewController;
+            if (root) break;
+        }
+    }
+    if (!root) root = UIApplication.sharedApplication.keyWindow.rootViewController;
+    UIViewController *host = root;
+    while (host.presentedViewController && !host.presentedViewController.isBeingDismissed) host = host.presentedViewController;
+    return host;
+}
+- (void)presentComparisonMainURL:(NSURL *)mainURL subURL:(NSURL *)subURL {
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
+    if (!mainURL || !subURL || [mainURL.path isEqualToString:subURL.path]) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *presenter = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];
+        if (!presenter) return;
+        self.comparisonPlayer = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:subURL];
+        void (^present)(void) = ^{
+            [presenter presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
+        };
+        if (self.receivedPlayer.presentingViewController) [self.receivedPlayer dismissViewControllerAnimated:NO completion:present];
+        else if (presenter.presentedViewController && presenter.presentedViewController != self.comparisonPlayer) {
+            [presenter dismissViewControllerAnimated:NO completion:present];
+        } else present();
+    });
+}
 + (instancetype)shared { static id instance; static dispatch_once_t once; dispatch_once(&once, ^{ instance = [self new]; }); return instance; }
 - (instancetype)init {
     if ((self = [super init])) {
@@ -43,24 +76,84 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     return self;
 }
 - (void)handleReceivedURL:(NSURL *)url {
+    // 受信待機中に本体録画が直前に完了している場合は、メタデータを介さず
+    // その2本を直接比較画面へ渡す。旧版サイドカーの役割誤りで単独再生に
+    // フォールバックする経路をここで遮断する。
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) {
+        NSString *localPath = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestLocalCameraRecordingPath"];
+        if (localPath.length && ![localPath isEqualToString:url.path] && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+            [self presentComparisonMainURL:[NSURL fileURLWithPath:localPath] subURL:url];
+            return;
+        }
+    }
     NSURL *sidecar = [url URLByAppendingPathExtension:@"wj.json"];
     NSDictionary *info = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:sidecar] ?: [NSData data] options:0 error:nil];
     NSString *sessionID = info[@"sessionID"];
     NSString *role = info[@"cameraRole"];
+    // iPadが受信待機中で直近のローカル録画を持っている場合、ここで届く動画は
+    // リモート撮影用のサブ映像である。送信元の旧サイドカーがMAIN_CAMERAでも、
+    // それをそのまま扱うと単独再生になってしまうため、受信側の構成を優先する。
+    NSString *localPath = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestLocalCameraRecordingPath"];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] && localPath.length && ![localPath isEqualToString:url.path] && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        role = @"SUB_CAMERA";
+    }
+    // 旧形式の転送メタデータでも、受信した動画はサブカメラ映像として
+    // 現在のローカルメイン映像との比較対象にできるよう補完する。
+    if (!sessionID.length) sessionID = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSessionID"];
+    if (sessionID.length && ![role isEqualToString:@"MAIN_CAMERA"] && ![role isEqualToString:@"SUB_CAMERA"]) role = @"SUB_CAMERA";
     if (sessionID.length && ( [role isEqualToString:@"MAIN_CAMERA"] || [role isEqualToString:@"SUB_CAMERA"] )) {
         NSMutableDictionary *session = self.receivedSessions[sessionID];
         if (!session) { session = [NSMutableDictionary dictionary]; self.receivedSessions[sessionID] = session; }
         session[role] = url;
+        // iPad自身がメインカメラとして録画した場合、iPad側の動画は転送されない。
+        // そのため、受信したSUB_CAMERAのSession IDとローカル保存動画のサイドカーを照合して比較再生へ参加させる。
+        if ([role isEqualToString:@"SUB_CAMERA"] && !session[@"MAIN_CAMERA"]) {
+            NSString *localPath = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestLocalCameraRecordingPath"];
+            NSURL *localURL = localPath.length ? [NSURL fileURLWithPath:localPath] : nil;
+            NSURL *localSidecar = [localURL URLByAppendingPathExtension:@"wj.json"];
+            NSDictionary *localInfo = localURL ? [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:localSidecar] ?: [NSData data] options:0 error:nil] : nil;
+            if ([localInfo[@"sessionID"] isEqualToString:sessionID] && [localInfo[@"cameraRole"] isEqualToString:@"MAIN_CAMERA"]) session[@"MAIN_CAMERA"] = localURL;
+            // 旧版サイドカーや保存直後の端末では役割情報が欠けることがある。
+            // 本体の直近保存動画はこの受信セッションのメイン映像として扱い、
+            // 片方だけの再生に落ちないようにする。
+            if (!session[@"MAIN_CAMERA"] && localURL && [localURL.path isEqualToString:url.path] == NO && [[NSFileManager defaultManager] fileExistsAtPath:localURL.path]) {
+                session[@"MAIN_CAMERA"] = localURL;
+            }
+            if (!session[@"MAIN_CAMERA"] && @available(iOS 13.0, *)) {
+                double subCreated = [info[@"created"] doubleValue];
+                for (NSURL *candidate in [ReceivedVideoManager videos]) {
+                    NSDictionary *candidateInfo = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:[candidate URLByAppendingPathExtension:@"wj.json"]] ?: [NSData data] options:0 error:nil];
+                    if ([candidateInfo[@"sessionID"] isEqualToString:sessionID] && [candidateInfo[@"cameraRole"] isEqualToString:@"MAIN_CAMERA"]) { session[@"MAIN_CAMERA"] = candidate; break; }
+                    double candidateCreated = [candidateInfo[@"created"] doubleValue];
+                    if (!session[@"MAIN_CAMERA"] && [candidateInfo[@"cameraRole"] isEqualToString:@"MAIN_CAMERA"] && subCreated > 0 && candidateCreated > 0 && fabs(candidateCreated - subCreated) < 120.0) session[@"MAIN_CAMERA"] = candidate;
+                }
+                // セッションIDが欠落した旧動画でも、受信時刻に最も近いローカル動画を
+                // メイン映像として採用する。転送先には通常この直前の1本しか新規保存されない。
+                if (!session[@"MAIN_CAMERA"]) {
+                    for (NSURL *candidate in [ReceivedVideoManager videos]) {
+                        if ([candidate.path isEqualToString:url.path]) continue;
+                        NSDate *date = [candidate resourceValuesForKeys:@[NSURLCreationDateKey] error:nil][NSURLCreationDateKey];
+                        double candidateCreated = date ? date.timeIntervalSince1970 : 0;
+                        if (subCreated > 0 && candidateCreated > 0 && fabs(candidateCreated - subCreated) < 180.0) { session[@"MAIN_CAMERA"] = candidate; break; }
+                    }
+                }
+            }
+        }
         NSURL *mainURL = session[@"MAIN_CAMERA"], *subURL = session[@"SUB_CAMERA"];
         if (mainURL && subURL) {
+            if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
             [self.receivedSessions removeObjectForKey:sessionID];
             dispatch_async(dispatch_get_main_queue(), ^{
-                UIViewController *host = UIApplication.sharedApplication.keyWindow.rootViewController;
-                if (self.receivedPlayer.presentingViewController) {
-                    [self.receivedPlayer dismissViewControllerAnimated:NO completion:nil];
-                }
+                UIViewController *host = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];
+                if (!host) return;
                 self.comparisonPlayer = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:subURL];
-                [host presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
+                void (^presentComparison)(void) = ^{
+                    if (!host.presentedViewController || host.presentedViewController.isBeingDismissed) {
+                        [host presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
+                    }
+                };
+                if (self.receivedPlayer.presentingViewController) [self.receivedPlayer dismissViewControllerAnimated:NO completion:presentComparison];
+                else presentComparison();
             });
             return;
         }
@@ -100,15 +193,31 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 - (void)retryTransfer { if (@available(iOS 13.0, *)) [self.transfer retry]; }
 - (void)retransferVideoURL:(NSURL *)url { if (@available(iOS 13.0, *)) [self.transfer requeue:url]; }
 - (void)displayReceived {
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) {
+        self.waitingReceivedURL = nil;
+        return;
+    }
     if (!self.waitingReceivedURL || self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
-    UIViewController *host = UIApplication.sharedApplication.keyWindow.rootViewController;
+    UIViewController *host = [self activePresentationHost];
+    if (!host) return;
     while (host.presentedViewController && host.presentedViewController != self.receivedPlayer) host = host.presentedViewController;
     if ([host isKindOfClass:UIAlertController.class] || host.isBeingDismissed) return;
     WaterJumpReceivedPlayerViewController *player = self.receivedPlayer;
     NSURL *url = self.waitingReceivedURL; self.waitingReceivedURL = nil;
-    if (player && player.presentingViewController) { [player replaceVideoURL:url]; }
+    NSArray<NSURL *> *videos = @[];
+    NSInteger currentIndex = 0;
+    if (@available(iOS 13.0, *)) {
+        videos = [ReceivedVideoManager videos];
+        NSUInteger found = [videos indexOfObject:url];
+        if (found != NSNotFound) currentIndex = (NSInteger)found;
+    }
+    if (player && player.presentingViewController) {
+        [player setPlaylist:videos.count ? videos : @[url] currentIndex:currentIndex];
+        [player replaceVideoURL:url];
+    }
     else {
         player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url]; self.receivedPlayer = player;
+        [player setPlaylist:videos.count ? videos : @[url] currentIndex:currentIndex];
         player.modalPresentationStyle = UIModalPresentationFullScreen;
         player.modalPresentationCapturesStatusBarAppearance = YES;
         [host presentViewController:player animated:YES completion:nil];
@@ -140,6 +249,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
                 BOOL isSubCamera = [info[@"cameraRole"] isEqual:@"SUB_CAMERA"];
                 if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] && (isSubCamera || ![[NSUserDefaults standardUserDefaults] boolForKey:@"WJTagBeforeTransfer"])) [self.transfer enqueue:saved metadata:info];
             } else self.message = [@"動画保存失敗: " stringByAppendingString:error.localizedDescription];
+            if (saved) [[NSNotificationCenter defaultCenter] postNotificationName:@"WJVideoSaved" object:saved];
             completion(saved, info, error); [self publish];
         }];
     } else completion(nil, nil, [NSError errorWithDomain:@"MTJudge.WJ" code:1 userInfo:@{NSLocalizedDescriptionKey:@"自動保存にはiOS 13以降が必要です"}]);
@@ -180,6 +290,47 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 #endif
     }];
     [task resume];
+}
+
+- (void)considerLocalMainRecordingURL:(NSURL *)url {
+    if (!url) return;
+    NSURL *sidecar = [url URLByAppendingPathExtension:@"wj.json"];
+    NSDictionary *rawInfo = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:sidecar] ?: [NSData data] options:0 error:nil];
+    NSMutableDictionary *info = [rawInfo mutableCopy] ?: [NSMutableDictionary dictionary];
+    // 受信待機中のiPadで保存された動画は、旧サイドカーの役割が残っていても
+    // 比較再生のメイン映像として扱う。
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] && ![info[@"cameraRole"] isEqualToString:@"MAIN_CAMERA"]) {
+        info[@"cameraRole"] = @"MAIN_CAMERA";
+        NSData *data = [NSJSONSerialization dataWithJSONObject:info options:0 error:nil];
+        if (data) [data writeToURL:sidecar options:NSDataWritingAtomic error:nil];
+    }
+    NSString *sessionID = info[@"sessionID"] ?: [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSessionID"];
+    if (!sessionID.length || ![info[@"cameraRole"] isEqualToString:@"MAIN_CAMERA"]) {
+        if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) return;
+    }
+    NSMutableDictionary *session = self.receivedSessions[sessionID];
+    // 受信側とローカル側で旧セッションIDの形式が異なる場合も、待機中の
+    // サブ動画が1本だけなら同じ撮影として結び付ける。
+    if (!session) {
+        for (NSString *key in self.receivedSessions) {
+            NSMutableDictionary *candidate = self.receivedSessions[key];
+            if (candidate[@"SUB_CAMERA"] && !candidate[@"MAIN_CAMERA"]) { session = candidate; sessionID = key; break; }
+        }
+    }
+    NSURL *subURL = session[@"SUB_CAMERA"];
+    if (!subURL) return;
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
+    [self.receivedSessions removeObjectForKey:sessionID];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *host = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];
+        if (!host) return;
+        self.comparisonPlayer = [[WaterJumpComparisonViewController alloc] initWithMainURL:url subURL:subURL];
+        void (^presentComparison)(void) = ^{
+            [host presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
+        };
+        if (self.receivedPlayer.presentingViewController) [self.receivedPlayer dismissViewControllerAnimated:NO completion:presentComparison];
+        else presentComparison();
+    });
 }
 - (NSDictionary *)status {
     BOOL ready = self.recording && !self.recording.busy && self.modeEnabled && self.recording.canStart && self.recording.canStart() && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;

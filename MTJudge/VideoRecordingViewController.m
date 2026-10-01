@@ -55,6 +55,7 @@
 @property (nonatomic, strong) UIButton *playButton;
 @property (nonatomic, strong) UIButton *skeletonButton;
 @property (nonatomic, strong) UIButton *tagButton;
+@property (nonatomic, assign) BOOL tagSelectionEnabled;
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIStackView *zoomPresetsRow;
 @property (nonatomic, copy) NSArray<NSNumber *> *displayedZoomPresets;
@@ -224,9 +225,15 @@
                 if (saved) {
                     self.latestRecordingURL = saved;
                     [[NSUserDefaults standardUserDefaults] setObject:saved.path forKey:@"LatestCameraRecordingPath"];
+                    // 受信待機を有効にしたiPadは、この端末自身の録画を比較再生の
+                    // MAIN_CAMERAとして保持する。古い設定がSUB_CAMERAのままでも補正する。
+                    if (!isSubCamera || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) {
+                        [[NSUserDefaults standardUserDefaults] setObject:saved.path forKey:@"LatestLocalCameraRecordingPath"];
+                        [[WaterJumpCoordinator shared] considerLocalMainRecordingURL:saved];
+                    }
                     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
-                    if (!isSubCamera && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTagBeforeTransfer"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"]) {
-                        self.pendingAutomaticMetadata = metadata;
+                    if (!isSubCamera && self.tagSelectionEnabled) {
+                        self.pendingAutomaticMetadata = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] ? metadata : nil;
                         self.pendingRecordingURL = saved;
                         [self presentRecordingReview];
                     } else {
@@ -236,7 +243,7 @@
                     self.latestRecordingURL = outputFileURL;
                     self.pendingRecordingURL = outputFileURL;
                     [self.recordingController finishedWithError:saveError];
-                    if (!isSubCamera) [self presentRecordingReview];
+                    if (!isSubCamera && self.tagSelectionEnabled) [self presentRecordingReview];
                 }
                 [self updateCameraControls];
             }];
@@ -263,7 +270,9 @@
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
         [self updateCameraControls];
         [self.recordingController markSaved];
-        [self presentRecordingReview];
+        BOOL isSubCamera = [[[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraRole"] isEqualToString:@"SUB_CAMERA"];
+        if (!isSubCamera && self.tagSelectionEnabled) [self presentRecordingReview];
+        else [self savePendingWithoutTags];
     });
 }
 
@@ -365,6 +374,23 @@
     };
     review.exportHandler = ^(NSArray *selections) { finish(selections, YES); };
     [self presentViewController:navigation animated:YES completion:nil];
+}
+
+- (void)savePendingWithoutTags {
+    if (!self.pendingRecordingURL) return;
+    NSURL *url = self.pendingRecordingURL;
+    NSURL *target = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"mov"]];
+    NSError *error = nil;
+    if (![url isEqual:target] && [[NSFileManager defaultManager] fileExistsAtPath:url.path]) {
+        if (![[NSFileManager defaultManager] moveItemAtURL:url toURL:target error:&error]) target = url;
+    }
+    self.pendingRecordingURL = nil;
+    self.latestRecordingURL = target;
+    [[NSUserDefaults standardUserDefaults] setObject:target.path forKey:@"LatestCameraRecordingPath"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+    [self.recordingController markSaved];
+    [self updateCameraControls];
+    if (error) NSLog(@"untagged save failed: %@", error);
 }
 
 - (void)chooseDownloadsDirectoryWithCompletion:(void (^)(void))completion {
@@ -594,10 +620,12 @@
 
 // タグ管理画面に遷移するメソッドを追加
 - (IBAction)manageTagsButtonTapped:(id)sender {
-    if (self.pendingRecordingURL) {
-        [self presentRecordingReview];
-        return;
-    }
+    self.tagSelectionEnabled = !self.tagSelectionEnabled;
+    [self updateCameraControls];
+}
+
+- (void)editTagsLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
     TagListViewController *tagListVC = [[TagListViewController alloc] init];
     UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:tagListVC];
     [self presentViewController:navController animated:YES completion:nil];
@@ -613,6 +641,12 @@
             [self presentRecordingSavePicker];
             return;
         }
+        // 本体の録画ボタンは常にメインカメラとして新しいセッションを開始する。
+        // 直前にサブカメラとして使った状態を引き継ぐと、保存側で役割が誤認され、
+        // iPadのローカル動画とリモート動画を比較再生へ結び付けられない。
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        [defaults setBool:NO forKey:@"WJRemoteStartInProgress"];
+        [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
         NSError *startError = nil;
         if (![self.recordingController startAutomatic:[WaterJumpCoordinator shared].modeEnabled error:&startError]) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画を開始できません" message:startError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
@@ -700,6 +734,9 @@
     self.playButton = [self cameraButtonWithAction:@selector(togglePlayback:)];
     self.skeletonButton = [self cameraButtonWithAction:@selector(toggleSkeletonDrawing:)];
     self.tagButton = [self cameraButtonWithAction:@selector(manageTagsButtonTapped:)];
+    UILongPressGestureRecognizer *tagEditGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(editTagsLongPress:)];
+    tagEditGesture.minimumPressDuration = .6;
+    [self.tagButton addGestureRecognizer:tagEditGesture];
     self.guideButton = [self cameraButtonWithAction:@selector(toggleGuide:)];
     self.deleteButton = [self cameraButtonWithAction:@selector(deleteLatestRecording:)];
     self.saveButton = [self cameraButtonWithAction:@selector(presentRecordingSavePicker)];
@@ -765,7 +802,8 @@
     [self styleButton:self.playButton title:playing ? @"再生停止" : @"最新動画を再生" symbol:playing ? @"stop.fill" : @"play.fill" color:UIColor.systemBlueColor];
     [self styleButton:self.skeletonButton title:self.isSkeletonDrawingEnabled ? @"骨格を非表示" : @"骨格を表示" symbol:@"figure.walk" color:self.isSkeletonDrawingEnabled ? [UIColor colorWithRed:0.08 green:0.45 blue:0.28 alpha:1] : neutral];
     self.skeletonButton.accessibilityValue = self.isSkeletonDrawingEnabled ? @"表示中" : @"非表示";
-    [self styleButton:self.tagButton title:@"タグ設定" symbol:@"tag.fill" color:neutral];
+    [self styleButton:self.tagButton title:self.tagSelectionEnabled ? @"タグ選択ON" : @"タグ選択OFF" symbol:@"tag.fill" color:self.tagSelectionEnabled ? UIColor.systemBlueColor : neutral];
+    self.tagButton.accessibilityValue = self.tagSelectionEnabled ? @"録画停止後にタグ選択を表示" : @"録画停止後にタグ選択を非表示";
     [self styleButton:self.guideButton title:self.guideEnabled ? @"十字ガイドを非表示" : @"十字ガイドを表示" symbol:@"scope" color:self.guideEnabled ? UIColor.systemBlueColor : neutral];
     self.guideButton.accessibilityValue = self.guideEnabled ? @"表示中" : @"非表示";
     [self styleButton:self.saveButton title:@"保存先を選択" symbol:@"square.and.arrow.down" color:neutral];

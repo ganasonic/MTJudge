@@ -10,6 +10,7 @@
 @property (nonatomic, strong) UIView *speedControlContainer;
 @property (nonatomic, weak) UIView *speedControlHost;
 @property (nonatomic, strong) UISlider *speedSlider;
+@property (nonatomic, strong) UISlider *positionSlider;
 @property (nonatomic, strong) UILabel *speedValueLabel;
 @property (nonatomic, strong) NSTimer *speedHideTimer;
 @property (nonatomic, strong) UIView *featureControlContainer;
@@ -33,6 +34,12 @@
 @property (nonatomic, strong) UIButton *takeoffButton;
 @property (nonatomic, strong) UIButton *skeletonButton;
 @property (nonatomic, strong) UIButton *deleteButton;
+@property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UIButton *shareButton;
+@property (nonatomic, strong) UIButton *favoriteButton;
+@property (nonatomic, strong) UIImageView *favoriteIndicator;
+@property (nonatomic, strong) UIButton *playButton;
+@property (nonatomic, assign) BOOL favorite;
 @property (nonatomic, assign) NSInteger takeoffSetupStep;
 @property (nonatomic, strong) UILabel *ankleAnalysisLabel;
 @property (nonatomic, strong) UILabel *kneeAnalysisLabel;
@@ -88,6 +95,17 @@
         [self.analysisLabel.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor constant:56],
         [self.analysisLabel.widthAnchor constraintGreaterThanOrEqualToConstant:150]
     ]];
+    self.favoriteIndicator = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"heart.fill"]];
+    self.favoriteIndicator.translatesAutoresizingMaskIntoConstraints = NO;
+    self.favoriteIndicator.tintColor = UIColor.systemPinkColor;
+    self.favoriteIndicator.hidden = YES;
+    [host addSubview:self.favoriteIndicator];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.favoriteIndicator.centerXAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerXAnchor],
+        [self.favoriteIndicator.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor constant:16],
+        [self.favoriteIndicator.widthAnchor constraintEqualToConstant:30],
+        [self.favoriteIndicator.heightAnchor constraintEqualToConstant:30]
+    ]];
     self.ankleAnalysisLabel = [self makePartAnalysisLabel];
     self.kneeAnalysisLabel = [self makePartAnalysisLabel];
     self.hipAnalysisLabel = [self makePartAnalysisLabel];
@@ -124,6 +142,7 @@
     if (!self.playbackTimeObserver) {
         __weak typeof(self) weakSelf = self;
         self.playbackTimeObserver = [self.player addPeriodicTimeObserverForInterval:CMTimeMake(1, 30) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
+            [weakSelf updatePositionSlider];
             [weakSelf updateAnalysisForTime:time];
             if (weakSelf.loopEnabled && CMTIME_IS_VALID(weakSelf.loopStartTime) && CMTIME_IS_VALID(weakSelf.loopEndTime) && CMTimeCompare(weakSelf.loopEndTime, weakSelf.loopStartTime) > 0) {
                 if (CMTimeCompare(time, weakSelf.loopEndTime) >= 0) {
@@ -140,6 +159,7 @@
     }
     [self resetAndPlay];
     [self loadAnalysisForCurrentVideo];
+    [self refreshFavoriteState];
 }
 
 - (void)installPlaylistGestures {
@@ -332,13 +352,27 @@
     self.speedValueLabel.text = @"1.00×";
     [self.speedControlContainer addSubview:self.speedSlider];
     [self.speedControlContainer addSubview:self.speedValueLabel];
+    self.positionSlider = [UISlider new];
+    self.positionSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    self.positionSlider.minimumValue = 0;
+    self.positionSlider.maximumValue = 1;
+    self.positionSlider.minimumTrackTintColor = UIColor.systemBlueColor;
+    self.positionSlider.accessibilityLabel = @"再生位置";
+    [self.positionSlider addTarget:self action:@selector(positionSliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.speedControlContainer addSubview:self.positionSlider];
     [NSLayoutConstraint activateConstraints:@[
         [self.speedControlContainer.centerXAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerXAnchor],
         [self.speedControlContainer.bottomAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.bottomAnchor constant:-24],
-        [self.speedControlContainer.widthAnchor constraintEqualToConstant:300],
-        [self.speedControlContainer.heightAnchor constraintEqualToConstant:50],
+        [self.speedControlContainer.widthAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.widthAnchor constant:-32],
+        [self.speedControlContainer.widthAnchor constraintLessThanOrEqualToConstant:900],
+        [self.speedControlContainer.heightAnchor constraintEqualToConstant:88],
+        // シークバーは左右の操作ボタンの間だけを使う。
+        [self.positionSlider.leadingAnchor constraintEqualToAnchor:self.speedControlContainer.leadingAnchor constant:58],
+        [self.positionSlider.trailingAnchor constraintEqualToAnchor:self.speedControlContainer.trailingAnchor constant:-58],
+        [self.positionSlider.centerYAnchor constraintEqualToAnchor:self.speedControlContainer.topAnchor constant:30],
         [self.speedSlider.leadingAnchor constraintEqualToAnchor:self.speedControlContainer.leadingAnchor constant:12],
-        [self.speedSlider.centerYAnchor constraintEqualToAnchor:self.speedControlContainer.centerYAnchor],
+        [self.speedSlider.bottomAnchor constraintEqualToAnchor:self.speedControlContainer.bottomAnchor constant:-6],
+        [self.speedSlider.centerYAnchor constraintEqualToAnchor:self.speedControlContainer.bottomAnchor constant:-25],
         [self.speedSlider.trailingAnchor constraintEqualToAnchor:self.speedValueLabel.leadingAnchor constant:-8],
         [self.speedValueLabel.trailingAnchor constraintEqualToAnchor:self.speedControlContainer.trailingAnchor constant:-12],
         [self.speedValueLabel.centerYAnchor constraintEqualToAnchor:self.speedControlContainer.centerYAnchor],
@@ -361,7 +395,55 @@
     self.skeletonButton = [self featureButtonWithSymbol:@"figure.stand" action:@selector(toggleSkeleton:) label:@"骨格線表示"];
     self.deleteButton = [self featureButtonWithSymbol:@"trash" action:@selector(deleteCurrentVideo:) label:@"再生中の動画を削除"];
     self.deleteButton.tintColor = UIColor.systemRedColor;
-    UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.frameStepButton, self.mirrorButton, self.skeletonButton, self.takeoffButton, self.deleteButton]];
+    self.deleteButton.hidden = YES;
+    self.playButton = [self featureButtonWithSymbol:@"pause.fill" action:@selector(togglePlay:) label:@"再生・一時停止"];
+    self.playButton.hidden = YES;
+    self.shareButton = [self featureButtonWithSymbol:@"square.and.arrow.up" action:@selector(shareCurrentVideo:) label:@"動画を共有"];
+    self.favoriteButton = [self featureButtonWithSymbol:@"heart" action:@selector(toggleFavorite:) label:@"お気に入り"];
+    self.favoriteButton.hidden = YES;
+    self.closeButton = [self featureButtonWithSymbol:@"xmark" action:@selector(closePlayer:) label:@"閉じる"];
+    self.closeButton.tintColor = UIColor.whiteColor;
+    // 閉じる操作は常に見えるよう、機能ボタン列から分離して左上へ固定する。
+    self.closeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [host addSubview:self.closeButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.closeButton.leadingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.leadingAnchor constant:12],
+        [self.closeButton.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor constant:12],
+        [self.closeButton.widthAnchor constraintEqualToConstant:38],
+        [self.closeButton.heightAnchor constraintEqualToConstant:36]
+    ]];
+    // iPhoneの横幅でも操作できるよう、再生・コマ送り・お気に入り・削除は
+    // 横一列のグループから外して固定位置に置く。
+    self.frameStepButton.hidden = YES;
+    for (UIButton *button in @[self.playButton, self.frameStepButton, self.favoriteButton, self.deleteButton]) {
+        button.translatesAutoresizingMaskIntoConstraints = NO;
+        [host addSubview:button];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [self.playButton.leadingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.leadingAnchor constant:10],
+        [self.playButton.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor],
+        [self.playButton.widthAnchor constraintEqualToConstant:38], [self.playButton.heightAnchor constraintEqualToConstant:36],
+        [self.frameStepButton.trailingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.trailingAnchor constant:-10],
+        [self.frameStepButton.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor],
+        [self.frameStepButton.widthAnchor constraintEqualToConstant:38], [self.frameStepButton.heightAnchor constraintEqualToConstant:36],
+        [self.favoriteButton.trailingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.trailingAnchor constant:-16],
+        [self.favoriteButton.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor constant:12],
+        [self.favoriteButton.widthAnchor constraintEqualToConstant:38], [self.favoriteButton.heightAnchor constraintEqualToConstant:36],
+        // 削除は操作列と共有ボタンから離し、画面左中央に固定する。
+        [self.deleteButton.leadingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.leadingAnchor constant:10],
+        [self.deleteButton.centerYAnchor constraintEqualToAnchor:host.centerYAnchor],
+        [self.deleteButton.widthAnchor constraintEqualToConstant:38], [self.deleteButton.heightAnchor constraintEqualToConstant:36]
+    ]];
+    // 共有はお気に入りの直下へ固定し、中央の解析ボタン列から外す。
+    self.shareButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [host addSubview:self.shareButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.shareButton.trailingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.trailingAnchor constant:-16],
+        [self.shareButton.centerYAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerYAnchor],
+        [self.shareButton.widthAnchor constraintEqualToConstant:38], [self.shareButton.heightAnchor constraintEqualToConstant:36]
+    ]];
+    // A点からTakeoffまでを画面幅の80%に広げ、均等間隔で配置する。
+    UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.mirrorButton, self.skeletonButton, self.takeoffButton]];
     featureStack.translatesAutoresizingMaskIntoConstraints = NO;
     featureStack.axis = UILayoutConstraintAxisHorizontal;
     featureStack.alignment = UIStackViewAlignmentCenter;
@@ -371,7 +453,8 @@
     [NSLayoutConstraint activateConstraints:@[
         [self.featureControlContainer.centerXAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerXAnchor],
         [self.featureControlContainer.bottomAnchor constraintEqualToAnchor:self.speedControlContainer.topAnchor constant:-8],
-        [self.featureControlContainer.widthAnchor constraintEqualToConstant:410],
+        [self.featureControlContainer.widthAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.widthAnchor multiplier:0.8],
+        [self.featureControlContainer.widthAnchor constraintLessThanOrEqualToConstant:700],
         [self.featureControlContainer.heightAnchor constraintEqualToConstant:44],
         [featureStack.leadingAnchor constraintEqualToAnchor:self.featureControlContainer.leadingAnchor constant:8],
         [featureStack.trailingAnchor constraintEqualToAnchor:self.featureControlContainer.trailingAnchor constant:-8],
@@ -388,7 +471,7 @@
     button.layer.cornerRadius = 7;
     [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    [button.widthAnchor constraintEqualToConstant:44].active = YES;
+    [button.widthAnchor constraintEqualToConstant:38].active = YES;
     [button.heightAnchor constraintEqualToConstant:36].active = YES;
     return button;
 }
@@ -417,7 +500,16 @@
         [self refreshFeatureButtons];
         [self resetAndPlay];
         [self loadAnalysisForCurrentVideo];
+        [self refreshFavoriteState];
     });
+}
+
+- (void)refreshFavoriteState {
+    NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
+    self.favorite = url && [[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] containsObject:url.path];
+    [self.favoriteButton setImage:[UIImage systemImageNamed:(self.favorite ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
+    self.favoriteButton.tintColor = self.favorite ? UIColor.systemPinkColor : UIColor.whiteColor;
+    self.favoriteIndicator.hidden = !self.favorite;
 }
 
 - (void)setPlaylist:(NSArray<NSURL *> *)playlist currentIndex:(NSInteger)index {
@@ -500,12 +592,30 @@
 - (void)showSpeedControls {
     self.speedControlContainer.hidden = NO;
     self.featureControlContainer.hidden = NO;
+    self.playButton.hidden = NO;
+    self.frameStepButton.hidden = NO;
+    self.favoriteButton.hidden = NO;
+    self.deleteButton.hidden = NO;
     [self.speedControlHost bringSubviewToFront:self.speedControlContainer];
+    [self.speedControlHost bringSubviewToFront:self.playButton];
+    [self.speedControlHost bringSubviewToFront:self.frameStepButton];
+    [self.speedControlHost bringSubviewToFront:self.deleteButton];
+    [self.speedControlHost bringSubviewToFront:self.shareButton];
+    [self.speedControlHost bringSubviewToFront:self.favoriteButton];
+    [self.speedControlHost bringSubviewToFront:self.closeButton];
+    [self.speedControlHost bringSubviewToFront:self.favoriteIndicator];
     [self.speedHideTimer invalidate];
     self.speedHideTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self selector:@selector(hideSpeedControls) userInfo:nil repeats:NO];
 }
 
-- (void)hideSpeedControls { self.speedControlContainer.hidden = YES; self.featureControlContainer.hidden = YES; }
+- (void)hideSpeedControls {
+    self.speedControlContainer.hidden = YES;
+    self.featureControlContainer.hidden = YES;
+    self.playButton.hidden = YES;
+    self.frameStepButton.hidden = YES;
+    self.favoriteButton.hidden = YES;
+    self.deleteButton.hidden = YES;
+}
 
 - (void)speedSliderChanged:(UISlider *)slider {
     [self showSpeedControls];
@@ -531,6 +641,55 @@
 - (void)updateSpeedSlider {
     self.speedSlider.value = self.wjSelectedSpeed;
     self.speedValueLabel.text = [NSString stringWithFormat:@"%.2f×", self.wjSelectedSpeed];
+}
+
+- (void)updatePositionSlider {
+    double duration = CMTimeGetSeconds(self.player.currentItem.duration);
+    double current = CMTimeGetSeconds(self.player.currentTime);
+    if (isfinite(duration) && duration > 0 && isfinite(current) && !self.positionSlider.isTracking) self.positionSlider.value = MIN(1.0, MAX(0.0, current / duration));
+}
+
+- (void)positionSliderChanged:(UISlider *)slider {
+    double duration = CMTimeGetSeconds(self.player.currentItem.duration);
+    if (!isfinite(duration) || duration <= 0) return;
+    CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600);
+    [self.player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
+    [self showSpeedControls];
+}
+
+- (void)togglePlay:(id)sender {
+    if (self.player.rate > 0) {
+        [self.player pause];
+        [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+    } else {
+        self.player.rate = self.wjSelectedSpeed;
+        [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal];
+    }
+    [self showSpeedControls];
+}
+
+- (void)closePlayer:(id)sender { [self dismissViewControllerAnimated:YES completion:nil]; }
+
+- (void)shareCurrentVideo:(id)sender {
+    NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
+    if (!url) return;
+    UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];
+    if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = sender; activity.popoverPresentationController.sourceRect = [sender bounds]; }
+    [self presentViewController:activity animated:YES completion:nil];
+}
+
+- (void)toggleFavorite:(id)sender {
+    NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
+    if (!url) return;
+    NSMutableArray *paths = [NSMutableArray arrayWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] ?: @[]];
+    if ([paths containsObject:url.path]) { [paths removeObject:url.path]; self.favorite = NO; }
+    else { [paths addObject:url.path]; self.favorite = YES; }
+    [[NSUserDefaults standardUserDefaults] setObject:paths forKey:@"WJFavoriteVideoPaths"];
+    [self.favoriteButton setImage:[UIImage systemImageNamed:(self.favorite ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
+    self.favoriteButton.tintColor = self.favorite ? UIColor.systemPinkColor : UIColor.whiteColor;
+    self.favoriteIndicator.hidden = !self.favorite;
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WJVideoFavoritesChanged" object:url];
+    [self showSpeedControls];
 }
 
 - (void)refreshFeatureButtons {
