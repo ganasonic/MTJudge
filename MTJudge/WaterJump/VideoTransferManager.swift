@@ -15,6 +15,7 @@ import Network
     private var channel: TransferChannel?
     private var input: FileHandle?
     private var activeID: String?
+    private var activeFilename: String?
     private var receiver: VideoReceiver?
     private var receiving = false
     private var retryTimer: Timer?
@@ -31,11 +32,11 @@ import Network
         // Reconstruct from the committed sidecars as well, closing the crash window
         // between local save and queue insertion. Filenames are never remote paths.
         let entries = (try? FileManager.default.contentsOfDirectory(at:ReceivedVideoManager.directory, includingPropertiesForKeys:nil)) ?? []
-        for entry in entries where entry.lastPathComponent.hasSuffix(".mov.wj.json") {
+        for entry in entries where entry.lastPathComponent.lowercased().hasSuffix(".mov.wj.json") {
             guard let data = try? Data(contentsOf:entry), let info = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
                   info["transferRequested"] as? Bool == true, info["received"] as? Bool != true, info["transferComplete"] as? Bool != true,
                   let id = info["id"] as? String, UUID(uuidString:id) != nil else { continue }
-            let filename = id + ".mov"
+            let filename = (info["filename"] as? String) ?? (id + ".mov")
             guard FileManager.default.fileExists(atPath:ReceivedVideoManager.directory.appendingPathComponent(filename).path) else { continue }
             jobs.append(["id":id,"file":filename,"metadata":info,"peer":info["peer"] as? String ?? ""])
         }
@@ -109,19 +110,27 @@ import Network
             state = "TRANSFER_FAILED"; message = "転送先が未接続です。同じWi-Fiで受信待機をONにし、再送してください。"; changed?(); return
         }
         guard persist() else { return }
+        var url = ReceivedVideoManager.directory.appendingPathComponent(filename)
+        if !FileManager.default.fileExists(atPath: url.path), let legacyID = job["id"] as? String {
+            let legacyURL = ReceivedVideoManager.directory.appendingPathComponent(legacyID).appendingPathExtension("mov")
+            if FileManager.default.fileExists(atPath: legacyURL.path) { url = legacyURL }
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            state = "TRANSFER_FAILED"; message = "転送元動画が見つかりません。保存動画一覧から再送してください。"; changed?(); return
+        }
+        activeFilename = url.lastPathComponent
         // Bind an initially unregistered job once; later destination changes never reroute it.
         if (jobs[0]["peer"] as? String ?? "").isEmpty {
             jobs[0]["peer"] = peer
             var boundInfo = info; boundInfo["peer"] = peer
             do {
-                let sidecar = ReceivedVideoManager.directory.appendingPathComponent(filename).appendingPathExtension("wj.json")
+                let sidecar = url.appendingPathExtension("wj.json")
                 try JSONSerialization.data(withJSONObject:boundInfo).write(to:sidecar, options:.atomic)
                 jobs[0]["metadata"] = boundInfo
                 guard persist() else { return }
             } catch { state = "TRANSFER_FAILED"; message = "転送先を保存できません"; changed?(); return }
         }
         activeID = id; state = "TRANSFERRING"; message = "iPadへ転送中..."; progress = 0; changed?()
-        let url = ReceivedVideoManager.directory.appendingPathComponent(filename)
         io.async {
             let wire = TransferChannel(connection, queue:self.io); self.channel = wire
             wire.failed = { [weak self] error in self?.finish(id, error: error) }
@@ -145,7 +154,8 @@ import Network
             wire.receiveJSON { response in
                 if response["state"] as? String == "TRANSFERRED", response["id"] as? String == id {
                     do {
-                        let sidecar = ReceivedVideoManager.directory.appendingPathComponent(id + ".mov.wj.json")
+                        let filename = self.activeFilename ?? (id + ".mov")
+                        let sidecar = ReceivedVideoManager.directory.appendingPathComponent(filename).appendingPathExtension("wj.json")
                         var metadata = try JSONSerialization.jsonObject(with:Data(contentsOf:sidecar)) as! [String:Any]
                         metadata["transferComplete"] = true
                         try JSONSerialization.data(withJSONObject:metadata).write(to:sidecar, options:.atomic)
@@ -167,7 +177,7 @@ import Network
         } catch { wire.fail(error) }
     }
     private func finish(_ id: String, error: Error?) {
-        channel?.close(); channel = nil; try? input?.close(); input = nil
+        channel?.close(); channel = nil; try? input?.close(); input = nil; activeFilename = nil
         DispatchQueue.main.async {
             guard self.activeID == id else { return }; self.activeID = nil
             if let error = error { self.state = "TRANSFER_FAILED"; self.message = "転送失敗: \(error.localizedDescription) 元動画は保存済みです。" }

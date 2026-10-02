@@ -270,6 +270,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 }
 
 - (void)sendSubCameraCommand:(NSString *)command {
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera"]) return;
     NSString *raw = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"];
     if (raw.length == 0 || ![command isEqualToString:@"START"] && ![command isEqualToString:@"STOP"]) return;
     NSURLComponents *components = [NSURLComponents componentsWithString:raw];

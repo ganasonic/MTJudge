@@ -39,9 +39,26 @@ import CryptoKit
               let size = metadata["size"] as? NSNumber, size.int64Value > 0 else { throw failure("受信情報が不正です。") }
         let files = FileManager.default
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
-        let final = directory.appendingPathComponent(id).appendingPathExtension("mov")
+        let requestedName = (metadata["filename"] as? String).flatMap { name -> String? in
+            let cleaned = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")
+            return cleaned.isEmpty ? nil : cleaned
+        } ?? {
+            let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyyMMddHHmmssSSS"
+            return "MTJ" + formatter.string(from: Date()) + ".MOV"
+        }()
+        var final = directory.appendingPathComponent(requestedName)
         if files.fileExists(atPath: final.path) {
-            guard try digest(final) == expected else { throw failure("同じIDの異なる動画が存在します。上書きしません。") }
+            if try digest(final) != expected {
+                let ext = (requestedName as NSString).pathExtension
+                let stem = (requestedName as NSString).deletingPathExtension
+                var index = 1
+                repeat {
+                    let candidate = directory.appendingPathComponent("\(stem)_\(index).\(ext.isEmpty ? "MOV" : ext)")
+                    if !files.fileExists(atPath: candidate.path) { final = candidate; break }
+                    index += 1
+                } while index < 10000
+                if files.fileExists(atPath: final.path) { throw failure("同名動画が多すぎるため保存できません。") }
+            }
         } else {
             let actual = try metadataForValidation(source)
             guard actual == size.int64Value, try digest(source) == expected else { throw failure("受信した動画のサイズまたはハッシュが一致しません。再送してください。") }
@@ -49,8 +66,10 @@ import CryptoKit
             do { try files.copyItem(at: source, to: temp); try files.moveItem(at: temp, to: final) }
             catch { try? files.removeItem(at: temp); throw error }
         }
-        try JSONSerialization.data(withJSONObject: metadata).write(to: final.appendingPathExtension("wj.json"), options: .atomic)
-        try JSONSerialization.data(withJSONObject: metadata["tags"] ?? []).write(to: final.appendingPathExtension("tags.json"), options: .atomic)
+        var persistedMetadata = metadata
+        persistedMetadata["filename"] = final.lastPathComponent
+        try JSONSerialization.data(withJSONObject: persistedMetadata).write(to: final.appendingPathExtension("wj.json"), options: .atomic)
+        try JSONSerialization.data(withJSONObject: persistedMetadata["tags"] ?? []).write(to: final.appendingPathExtension("tags.json"), options: .atomic)
         return final
     }
     private static func metadataForValidation(_ url: URL) throws -> Int64 {
@@ -71,6 +90,9 @@ import CryptoKit
                     catch { lastError = error; Thread.sleep(forTimeInterval: 0.25) }
                 }
                 guard var info = info else { throw lastError ?? failure("動画ファイルを読み込めません。元動画は保持しています。") }
+                let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyyMMddHHmmssSSS"
+                let sourceName = source.deletingPathExtension().lastPathComponent
+                info["filename"] = sourceName.hasPrefix("MTJ") ? sourceName + ".MOV" : "MTJ" + formatter.string(from: Date()) + ".MOV"
                 let isSubCamera = (info["cameraRole"] as? String) == "SUB_CAMERA"
                 info["transferRequested"] = UserDefaults.standard.bool(forKey:"WJTransfer") && (isSubCamera || !UserDefaults.standard.bool(forKey:"WJTagBeforeTransfer"))
                 info["peer"] = UserDefaults.standard.string(forKey:"WJPeerID") ?? ""
@@ -85,7 +107,7 @@ import CryptoKit
         let legacy = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CameraRecordings", isDirectory: true)
         if let oldFiles = try? FileManager.default.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil) {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            for old in oldFiles where old.pathExtension == "mov" {
+            for old in oldFiles where old.pathExtension.lowercased() == "mov" {
                 let target = directory.appendingPathComponent(old.lastPathComponent)
                 if !FileManager.default.fileExists(atPath: target.path) {
                     try? FileManager.default.moveItem(at: old, to: target)
@@ -98,7 +120,7 @@ import CryptoKit
             }
         }
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])) ?? []
-        let videos = files.filter { $0.pathExtension == "mov" }
+        let videos = files.filter { $0.pathExtension.lowercased() == "mov" }
         for video in videos {
             let sidecar = video.appendingPathExtension("wj.json")
             if !FileManager.default.fileExists(atPath: sidecar.path), let info = try? metadata(video, id: UUID().uuidString, tags: []) {

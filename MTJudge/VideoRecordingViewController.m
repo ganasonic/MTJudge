@@ -261,8 +261,8 @@
             }];
             return;
         }
-        NSURL *directory = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
-        directory = [directory URLByAppendingPathComponent:@"CameraRecordings" isDirectory:YES];
+        NSURL *directory = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+        directory = [directory URLByAppendingPathComponent:@"Recordings" isDirectory:YES];
         NSError *storageError = nil;
         [[NSFileManager defaultManager] createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&storageError];
         NSURL *localURL = [directory URLByAppendingPathComponent:outputFileURL.lastPathComponent];
@@ -307,7 +307,7 @@
                 NSString *name = [[selection[@"name"] componentsSeparatedByCharactersInSet:unsafe] componentsJoinedByString:@"-"];
                 [names addObject:[name substringToIndex:MIN(name.length, 24)]];
             }
-            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmss";
+            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmssSSS";
             NSString *suffix = [formatter stringFromDate:[NSDate date]];
             NSString *prefix = [names componentsJoinedByString:@"_"];
             prefix = [prefix substringToIndex:MIN(prefix.length, 60)];
@@ -320,7 +320,7 @@
                 [[NSUserDefaults standardUserDefaults] setObject:selections forKey:@"LatestCameraRecordingTags"];
             }
         } else if (!self.pendingAutomaticMetadata) {
-            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmss";
+            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmssSSS";
             NSString *timestamp = [formatter stringFromDate:[NSDate date]];
             NSURL *untaggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"MTJ%@.MOV", timestamp]];
             if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:untaggedURL error:&error]) {
@@ -349,43 +349,18 @@
             [self dismissViewControllerAnimated:YES completion:^{ [self presentRecordingSavePicker]; }];
             return;
         }
-        UIViewController *screen = self.presentedViewController;
-        screen.view.userInteractionEnabled = NO;
-        NSURL *sourceURL = self.pendingRecordingURL;
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSError *saveError = nil;
-            NSURL *savedURL = [[[FileSaver alloc] init] saveVideo:sourceURL selections:selections error:&saveError];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                screen.view.userInteractionEnabled = YES;
-                if (!savedURL) {
-                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"保存できませんでした" message:saveError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-                    [alert addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
-                    [alert addAction:[UIAlertAction actionWithTitle:@"保存先を再設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                        [FileSaver forgetDownloadsDirectory];
-                        [self chooseDownloadsDirectoryWithCompletion:nil];
-                    }]];
-                    [screen presentViewController:alert animated:YES completion:nil];
-                    return;
-                }
-                // 外部フォルダの権限や移動に左右されず最新動画を再生できるよう、
-                // アプリ内には直近の1本だけ再生用コピーを保持する。
-                self.latestRecordingURL = sourceURL;
-                self.pendingRecordingURL = nil;
-                [self.recordingController markSaved];
-                [[NSUserDefaults standardUserDefaults] setObject:sourceURL.path forKey:@"LatestCameraRecordingPath"];
-                [self updateCameraControls];
-                [self dismissViewControllerAnimated:YES completion:^{
-                    UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, @"動画を保存しました");
-                }];
-            });
-        });
+        // 通常保存はアプリ内Documents/Recordingsへ確定済み。外部のDownloads選択は行わない。
+        self.latestRecordingURL = self.pendingRecordingURL;
+        self.pendingRecordingURL = nil;
+        [self.recordingController markSaved];
+        [[NSUserDefaults standardUserDefaults] setObject:self.latestRecordingURL.path forKey:@"LatestCameraRecordingPath"];
+        [self updateCameraControls];
+        [self dismissViewControllerAnimated:YES completion:^{
+            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, @"動画を保存しました");
+        }];
     };
     review.saveHandler = ^(NSArray *selections) {
-        if ([FileSaver hasDownloadsDirectory]) {
-            finish(selections, NO);
-        } else {
-            [weakSelf chooseDownloadsDirectoryWithCompletion:^{ finish(selections, NO); }];
-        }
+        finish(selections, NO);
     };
     review.exportHandler = ^(NSArray *selections) { finish(selections, YES); };
     [self presentViewController:navigation animated:YES completion:nil];
@@ -394,7 +369,7 @@
 - (void)savePendingWithoutTags {
     if (!self.pendingRecordingURL) return;
     NSURL *url = self.pendingRecordingURL;
-    NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmss";
+    NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmssSSS";
     NSURL *target = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"MTJ%@.MOV", [formatter stringFromDate:[NSDate date]]]];
     NSError *error = nil;
     if (![url isEqual:target] && [[NSFileManager defaultManager] fileExistsAtPath:url.path]) {

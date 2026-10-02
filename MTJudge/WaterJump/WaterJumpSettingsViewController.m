@@ -428,7 +428,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)refresh { [self.tableView reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 10;
+    if (section == 0) return 11;
     if (section == 1) return 6;
     if (section == 2) return 1;
     return [WaterJumpCoordinator shared].discoveredPeers.count;
@@ -444,10 +444,10 @@ static UIImage *WJQRCodeImage(NSString *value) {
     cell.textLabel.numberOfLines = 0; cell.detailTextLabel.numberOfLines = 0;
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
     if (indexPath.section == 0) {
-        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"ループ再生設定"];
+        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"リモートカメラ1を使う", @"ループ再生設定"];
         cell.textLabel.text = names[indexPath.row];
         if (indexPath.row == 3) { cell.accessibilityIdentifier = @"WJDuration"; NSInteger duration = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJDuration"]; cell.detailTextLabel.text = duration > 0 ? [NSString stringWithFormat:@"%ld秒", (long)duration] : @"ー（手動停止）"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
-        else if (indexPath.row == 9) {
+        else if (indexPath.row == 10) {
             NSInteger count = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJLoopCount"]; if (count == 0) count = 3;
             NSInteger seconds = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJLoopDuration"];
             NSString *countText = count < 0 ? @"無限" : [NSString stringWithFormat:@"%ld回", (long)count];
@@ -455,23 +455,24 @@ static UIImage *WJQRCodeImage(NSString *value) {
             cell.detailTextLabel.text = timeText.length ? [NSString stringWithFormat:@"%@・%@", countText, timeText] : countText;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else {
-            NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback"];
+            NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback",@"WJUseSubCamera"];
             UISwitch *toggle = [UISwitch new]; toggle.tag = indexPath.row;
             toggle.accessibilityIdentifier = keys[indexPath.row];
             toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:keys[indexPath.row]];
             BOOL transferOrReceive = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
-            toggle.enabled = !manager.recordingBusy && (indexPath.row != 6 || ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"])) && (indexPath.row != 7 || transferOrReceive) && (indexPath.row != 8 || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]);
+            BOOL hasSubCamera = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"].length > 0;
+            toggle.enabled = !manager.recordingBusy && (indexPath.row != 6 || ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"])) && (indexPath.row != 7 || transferOrReceive) && (indexPath.row != 8 || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) && (indexPath.row != 9 || hasSubCamera);
             if ((indexPath.row == 6 || indexPath.row == 8) && !toggle.enabled) toggle.on = NO;
             [toggle addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
     } else if (indexPath.section == 1) {
-        NSArray *titles = @[@"状態", @"WebリモコンURL（タップでQR表示）", @"この端末の登録コード（タップでQR表示）", @"転送先", @"転送先URL登録", @"リモートカメラ2登録"];
+        NSArray *titles = @[@"状態", @"WebリモコンURL（タップでQR表示）", @"この端末の登録コード（タップでQR表示）", @"転送先", @"転送先URL登録", @"リモートカメラ1登録"];
         cell.textLabel.text = titles[indexPath.row];
         if (indexPath.row == 0) cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\n%@", manager.status[@"state"], manager.status[@"message"]];
         if (indexPath.row == 1) cell.detailTextLabel.text = manager.remoteAddress.length ? manager.remoteAddress : @"Remote CameraをONにしてください";
         if (indexPath.row == 2) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] ? manager.pairingCode : @"受信端末で受信待機をONにしてください";
         if (indexPath.row == 3) cell.detailTextLabel.text = manager.peerDescription;
-        if (indexPath.row == 5) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"] ?: @"未登録（2台目iPhoneのRemote Camera URLを入力）";
+        if (indexPath.row == 5) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"] ?: @"未登録（リモートカメラ1のRemote Camera URLを入力）";
         if (indexPath.row == 1 || indexPath.row == 2 || indexPath.row == 4 || indexPath.row == 5) {
             UIButton *qr = [UIButton buttonWithType:UIButtonTypeSystem];
             [qr setImage:[UIImage systemImageNamed:@"qrcode"] forState:UIControlStateNormal];
@@ -487,7 +488,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     return cell;
 }
 - (void)toggle:(UISwitch *)sender {
-    NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback"];
+    NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback",@"WJUseSubCamera"];
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults setBool:sender.on forKey:keys[sender.tag]];
     if (sender.tag == 6 && sender.on && (![defaults boolForKey:@"WJMode"] || ![defaults boolForKey:@"WJTransfer"])) [defaults setBool:NO forKey:@"WJTagBeforeTransfer"];
@@ -525,7 +526,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
 }
 - (void)presentSubCameraScanner {
     WJQRScannerViewController *scanner = [WJQRScannerViewController new];
-    scanner.screenTitle = @"リモートカメラ2登録";
+    scanner.screenTitle = @"リモートカメラ1登録";
     scanner.initialValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"];
     scanner.completion = ^(NSString *value) {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
@@ -556,7 +557,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
         }]];
         [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil];
     }
-    if (indexPath.section == 0 && indexPath.row == 9 && !manager.recordingBusy) {
+    if (indexPath.section == 0 && indexPath.row == 10 && !manager.recordingBusy) {
         UIAlertController *countAlert = [UIAlertController alertControllerWithTitle:@"ループ再生回数" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
         for (NSNumber *count in @[@3, @5, @10]) {
             [countAlert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@回", count] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [[NSUserDefaults standardUserDefaults] setInteger:count.integerValue forKey:@"WJLoopCount"]; [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"WJLoopDuration"]; [self refresh]; }]];
