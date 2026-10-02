@@ -6,12 +6,205 @@
 #import <AVKit/AVKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CoreImage/CoreImage.h>
+#import <Vision/Vision.h>
+#import <ImageIO/ImageIO.h>
 
 @interface WJVideoLibrary : UITableViewController <UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) NSArray<NSURL *> *videos;
 @property (nonatomic, strong) NSURL *selectedMainURL;
 @property (nonatomic, strong) NSURL *selectedSubURL;
 @end
+static UIImage *WJQRCodeImage(NSString *value) {
+    if (!value.length) return nil;
+    CIFilter *filter = [CIFilter filterWithName:@"CIQRCodeGenerator"];
+    [filter setValue:[value dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"];
+    [filter setValue:@"M" forKey:@"inputCorrectionLevel"];
+    CIImage *output = filter.outputImage;
+    if (!output) return nil;
+    CGFloat scale = 8.0;
+    CIImage *scaled = [output imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
+    return [UIImage imageWithCIImage:scaled scale:[UIScreen mainScreen].scale orientation:UIImageOrientationUp];
+}
+
+@interface WJQRScannerViewController : UIViewController <AVCaptureMetadataOutputObjectsDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
+@property (nonatomic, copy) NSString *initialValue;
+@property (nonatomic, copy) NSString *screenTitle;
+@property (nonatomic, copy) void (^completion)(NSString *value);
+@property (nonatomic, strong) AVCaptureSession *captureSession;
+@property (nonatomic, strong) AVCaptureMetadataOutput *metadataOutput;
+@property (nonatomic, strong) AVCaptureVideoDataOutput *videoOutput;
+@property (nonatomic, strong) AVCaptureVideoPreviewLayer *previewLayer;
+@property (nonatomic, weak) UIView *previewContainer;
+@property (nonatomic, weak) UILabel *hintLabel;
+@property (nonatomic, strong) UITextField *valueField;
+@property (nonatomic, assign) BOOL completed;
+@property (nonatomic, assign) BOOL processingFrame;
+@end
+
+@implementation WJQRScannerViewController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = UIColor.systemBackgroundColor;
+    self.title = self.screenTitle ?: @"QRコード読み取り";
+
+    UIView *preview = [UIView new];
+    preview.translatesAutoresizingMaskIntoConstraints = NO;
+    preview.backgroundColor = UIColor.blackColor;
+    preview.clipsToBounds = YES;
+    self.previewContainer = preview;
+    [self.view addSubview:preview];
+    UILayoutGuide *guide = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [preview.centerXAnchor constraintEqualToAnchor:guide.centerXAnchor],
+        [preview.topAnchor constraintEqualToAnchor:guide.topAnchor constant:24],
+        [preview.widthAnchor constraintLessThanOrEqualToConstant:300],
+        [preview.widthAnchor constraintEqualToAnchor:guide.widthAnchor multiplier:.82],
+        [preview.heightAnchor constraintEqualToAnchor:preview.widthAnchor]
+    ]];
+
+    UIView *target = [UIView new];
+    target.translatesAutoresizingMaskIntoConstraints = NO;
+    target.userInteractionEnabled = NO;
+    target.layer.borderColor = [UIColor.whiteColor colorWithAlphaComponent:.65].CGColor;
+    target.layer.borderWidth = 1.0;
+    [preview addSubview:target];
+    [NSLayoutConstraint activateConstraints:@[
+        [target.centerXAnchor constraintEqualToAnchor:preview.centerXAnchor],
+        [target.centerYAnchor constraintEqualToAnchor:preview.centerYAnchor],
+        [target.widthAnchor constraintEqualToAnchor:preview.widthAnchor multiplier:.75],
+        [target.heightAnchor constraintEqualToAnchor:preview.heightAnchor multiplier:.75]
+    ]];
+
+    UILabel *hint = [UILabel new];
+    hint.translatesAutoresizingMaskIntoConstraints = NO;
+    hint.text = @"枠内にQRコードを合わせてください";
+    hint.textAlignment = NSTextAlignmentCenter;
+    hint.textColor = UIColor.secondaryLabelColor;
+    hint.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    self.hintLabel = hint;
+    [self.view addSubview:hint];
+
+    self.valueField = [UITextField new];
+    self.valueField.translatesAutoresizingMaskIntoConstraints = NO;
+    self.valueField.borderStyle = UITextBorderStyleRoundedRect;
+    self.valueField.placeholder = @"読み取れない場合は入力";
+    self.valueField.text = self.initialValue;
+    self.valueField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.valueField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    [self.view addSubview:self.valueField];
+
+    UIButton *save = [UIButton buttonWithType:UIButtonTypeSystem];
+    save.translatesAutoresizingMaskIntoConstraints = NO;
+    [save setTitle:@"保存" forState:UIControlStateNormal];
+    [save addTarget:self action:@selector(saveValue) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *cancel = [UIButton buttonWithType:UIButtonTypeSystem];
+    cancel.translatesAutoresizingMaskIntoConstraints = NO;
+    [cancel setTitle:@"キャンセル" forState:UIControlStateNormal];
+    [cancel addTarget:self action:@selector(cancelScan) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:save]; [self.view addSubview:cancel];
+    [NSLayoutConstraint activateConstraints:@[
+        [hint.topAnchor constraintEqualToAnchor:preview.bottomAnchor constant:8],
+        [hint.leadingAnchor constraintEqualToAnchor:guide.leadingAnchor constant:16],
+        [hint.trailingAnchor constraintEqualToAnchor:guide.trailingAnchor constant:-16],
+        [self.valueField.topAnchor constraintEqualToAnchor:hint.bottomAnchor constant:14],
+        [self.valueField.leadingAnchor constraintEqualToAnchor:guide.leadingAnchor constant:20],
+        [self.valueField.trailingAnchor constraintEqualToAnchor:guide.trailingAnchor constant:-20],
+        [save.topAnchor constraintEqualToAnchor:self.valueField.bottomAnchor constant:12],
+        [save.trailingAnchor constraintEqualToAnchor:guide.centerXAnchor constant:-8],
+        [cancel.topAnchor constraintEqualToAnchor:self.valueField.bottomAnchor constant:12],
+        [cancel.leadingAnchor constraintEqualToAnchor:guide.centerXAnchor constant:8]
+    ]];
+
+    [self configureCaptureIfAuthorized];
+}
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo] == AVAuthorizationStatusNotDetermined) {
+        __weak typeof(self) weakSelf = self;
+        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
+            dispatch_async(dispatch_get_main_queue(), ^{ if (granted) [weakSelf configureCaptureIfAuthorized]; else weakSelf.hintLabel.text = @"カメラの使用を許可してください。許可しない場合は下の欄へ入力してください"; });
+        }];
+    } else {
+        [self configureCaptureIfAuthorized];
+    }
+}
+- (void)configureCaptureIfAuthorized {
+    if (self.captureSession) return;
+    AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+    if (status != AVAuthorizationStatusAuthorized) {
+        if (status == AVAuthorizationStatusDenied || status == AVAuthorizationStatusRestricted) self.hintLabel.text = @"カメラの使用を許可できないため、下の欄へ入力してください";
+        return;
+    }
+    AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    NSError *error = nil;
+    AVCaptureDeviceInput *input = device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
+    AVCaptureSession *session = [AVCaptureSession new];
+    if (input && [session canAddInput:input]) [session addInput:input]; else { self.hintLabel.text = @"カメラを使用できないため、下の欄へ入力してください"; return; }
+    AVCaptureMetadataOutput *output = [AVCaptureMetadataOutput new];
+    if (![session canAddOutput:output]) { self.hintLabel.text = @"QR読み取りを開始できません。下の欄へ入力してください"; return; }
+    [session addOutput:output];
+    AVCaptureVideoDataOutput *videoOutput = [AVCaptureVideoDataOutput new];
+    videoOutput.alwaysDiscardsLateVideoFrames = YES;
+    videoOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA)};
+    if ([session canAddOutput:videoOutput]) {
+        [session addOutput:videoOutput];
+        [videoOutput setSampleBufferDelegate:self queue:dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)];
+        self.videoOutput = videoOutput;
+    }
+    if ([session canSetSessionPreset:AVCaptureSessionPresetHigh]) session.sessionPreset = AVCaptureSessionPresetHigh;
+    self.captureSession = session;
+    self.metadataOutput = output;
+    [output setMetadataObjectsDelegate:self queue:dispatch_get_main_queue()];
+    output.metadataObjectTypes = @[AVMetadataObjectTypeQRCode];
+    output.rectOfInterest = CGRectMake(0, 0, 1, 1);
+    self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:session];
+    self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    self.previewLayer.frame = self.previewContainer.bounds;
+    [self.previewContainer.layer insertSublayer:self.previewLayer atIndex:0];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ [session startRunning]; });
+}
+- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; self.previewLayer.frame = self.previewLayer.superlayer.bounds; }
+- (void)metadataOutput:(AVCaptureMetadataOutput *)output didOutputMetadataObjects:(NSArray<__kindof AVMetadataMachineReadableCodeObject *> *)objects fromConnection:(AVCaptureConnection *)connection {
+    if (self.completed) return;
+    for (AVMetadataMachineReadableCodeObject *object in objects) {
+        NSString *value = object.stringValue;
+        if (value.length) { [self finishWithValue:value]; break; }
+    }
+}
+- (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    if (self.completed || self.processingFrame || !sampleBuffer) return;
+    self.processingFrame = YES;
+    CVImageBufferRef buffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (!buffer) { self.processingFrame = NO; return; }
+    VNDetectBarcodesRequest *request = [[VNDetectBarcodesRequest alloc] initWithCompletionHandler:^(VNRequest *request, NSError *error) {
+        NSString *found = nil;
+        for (VNBarcodeObservation *observation in request.results) {
+            if ([observation.symbology isEqualToString:VNBarcodeSymbologyQR] && observation.payloadStringValue.length) { found = observation.payloadStringValue; break; }
+        }
+        self.processingFrame = NO;
+        if (found.length) dispatch_async(dispatch_get_main_queue(), ^{ [self finishWithValue:found]; });
+    }];
+    request.symbologies = @[VNBarcodeSymbologyQR];
+    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCVPixelBuffer:buffer orientation:kCGImagePropertyOrientationUp options:@{}];
+    [handler performRequests:@[request] error:nil];
+}
+- (void)saveValue { [self finishWithValue:[self.valueField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]]; }
+- (void)finishWithValue:(NSString *)value {
+    if (self.completed) return;
+    self.completed = YES;
+    self.valueField.text = value ?: @"";
+    [self.captureSession stopRunning];
+    if (self.completion) self.completion(value ?: @"");
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+- (void)cancelScan {
+    self.completed = YES;
+    [self.captureSession stopRunning];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+@end
+
 @implementation WJVideoLibrary
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -222,6 +415,7 @@
 @end
 
 @implementation WaterJumpSettingsViewController
++ (UIViewController *)videoLibraryViewController { return [WJVideoLibrary new]; }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.title = @"ウォータージャンプ";
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
@@ -236,7 +430,7 @@
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     if (section == 0) return 10;
     if (section == 1) return 6;
-    if (section == 2) return 2;
+    if (section == 2) return 1;
     return [WaterJumpCoordinator shared].discoveredPeers.count;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section { return @[@"録画・受信設定", @"接続情報", @"動画", @"検出した受信端末（選択して登録）"][section]; }
@@ -271,15 +465,22 @@
             [toggle addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
     } else if (indexPath.section == 1) {
-        NSArray *titles = @[@"状態", @"WebリモコンURL（タップでコピー）", @"この端末の登録コード（タップでコピー）", @"転送先", @"登録コードを入力して転送先を登録", @"2台目撮影用iPhone Remote URL"];
+        NSArray *titles = @[@"状態", @"WebリモコンURL（タップでQR表示）", @"この端末の登録コード（タップでQR表示）", @"転送先", @"転送先URL登録", @"リモートカメラ2登録"];
         cell.textLabel.text = titles[indexPath.row];
         if (indexPath.row == 0) cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\n%@", manager.status[@"state"], manager.status[@"message"]];
         if (indexPath.row == 1) cell.detailTextLabel.text = manager.remoteAddress.length ? manager.remoteAddress : @"Remote CameraをONにしてください";
         if (indexPath.row == 2) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] ? manager.pairingCode : @"受信端末で受信待機をONにしてください";
         if (indexPath.row == 3) cell.detailTextLabel.text = manager.peerDescription;
         if (indexPath.row == 5) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"] ?: @"未登録（2台目iPhoneのRemote Camera URLを入力）";
+        if (indexPath.row == 1 || indexPath.row == 2 || indexPath.row == 4 || indexPath.row == 5) {
+            UIButton *qr = [UIButton buttonWithType:UIButtonTypeSystem];
+            [qr setImage:[UIImage systemImageNamed:@"qrcode"] forState:UIControlStateNormal];
+            qr.tintColor = UIColor.secondaryLabelColor; qr.frame = CGRectMake(0, 0, 36, 36); qr.accessibilityLabel = @"QRコードを読み取る"; qr.tag = indexPath.row;
+            [qr addTarget:self action:@selector(scanQRButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
+            cell.accessoryView = qr;
+        }
     } else if (indexPath.section == 2) {
-        cell.textLabel.text = indexPath.row == 0 ? @"転送を再送" : @"保存・受信した練習動画を見る"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.textLabel.text = @"転送を再送"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else {
         NSDictionary *peer = manager.discoveredPeers[indexPath.row]; cell.textLabel.text = peer[@"name"]; cell.detailTextLabel.text = peer[@"id"]; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     }
@@ -294,6 +495,53 @@
     if (sender.on && sender.tag == 5) { [defaults setBool:NO forKey:@"WJMode"]; [defaults setBool:NO forKey:@"WJTransfer"]; }
     if (sender.on && (sender.tag == 0 || sender.tag == 4)) [defaults setBool:NO forKey:@"WJReceive"];
     [[WaterJumpCoordinator shared] applySettings]; [self refresh];
+}
+- (void)showQRCodeForValue:(NSString *)value title:(NSString *)title {
+    UIImage *image = WJQRCodeImage(value);
+    if (!image) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:@"別端末のカメラで読み取ってください。" preferredStyle:UIAlertControllerStyleAlert];
+    UIImageView *imageView = [[UIImageView alloc] initWithImage:image];
+    imageView.translatesAutoresizingMaskIntoConstraints = NO;
+    imageView.contentMode = UIViewContentModeScaleAspectFit;
+    [alert.view addSubview:imageView];
+    [NSLayoutConstraint activateConstraints:@[[imageView.centerXAnchor constraintEqualToAnchor:alert.view.centerXAnchor], [imageView.bottomAnchor constraintEqualToAnchor:alert.view.bottomAnchor constant:-52], [imageView.widthAnchor constraintEqualToConstant:220], [imageView.heightAnchor constraintEqualToConstant:220]]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)presentPeerScanner:(NSDictionary *)peer {
+    WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
+    WJQRScannerViewController *scanner = [WJQRScannerViewController new];
+    scanner.screenTitle = @"転送先URL登録";
+    scanner.completion = ^(NSString *code) {
+        BOOL matches = !peer || [code hasPrefix:[peer[@"id"] stringByAppendingString:@":"]];
+        if (!matches || ![manager registerPeer:peer[@"name"] ?: @"登録済みiPad" code:code]) {
+            UIAlertController *error = [UIAlertController alertControllerWithTitle:@"登録できません" message:@"選択した端末の登録コードを確認してください。" preferredStyle:UIAlertControllerStyleAlert];
+            [error addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:error animated:YES completion:nil];
+        }
+    };
+    scanner.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:scanner animated:YES completion:nil];
+}
+- (void)presentSubCameraScanner {
+    WJQRScannerViewController *scanner = [WJQRScannerViewController new];
+    scanner.screenTitle = @"リモートカメラ2登録";
+    scanner.initialValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"];
+    scanner.completion = ^(NSString *value) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        if (value.length) [defaults setObject:value forKey:@"WJSubCameraURL"];
+        else [defaults removeObjectForKey:@"WJSubCameraURL"];
+        [self refresh];
+    };
+    scanner.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:scanner animated:YES completion:nil];
+}
+- (void)scanQRButtonTapped:(UIButton *)sender {
+    WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
+    if (sender.tag == 1 && manager.remoteAddress.length) { UIPasteboard.generalPasteboard.string = manager.remoteAddress; [self showQRCodeForValue:manager.remoteAddress title:@"WebリモコンURL"]; }
+    else if (sender.tag == 2 && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) { UIPasteboard.generalPasteboard.string = manager.pairingCode; [self showQRCodeForValue:manager.pairingCode title:@"この端末の登録コード"]; }
+    else if (sender.tag == 4) [self presentPeerScanner:nil];
+    else if (sender.tag == 5) [self presentSubCameraScanner];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -325,35 +573,15 @@
         [countAlert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:countAlert animated:YES completion:nil];
     }
-    if (indexPath.section == 1 && indexPath.row == 1 && manager.remoteAddress.length) UIPasteboard.generalPasteboard.string = manager.remoteAddress;
-    if (indexPath.section == 1 && indexPath.row == 2 && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) UIPasteboard.generalPasteboard.string = manager.pairingCode;
+    if (indexPath.section == 1 && indexPath.row == 1 && manager.remoteAddress.length) { UIPasteboard.generalPasteboard.string = manager.remoteAddress; [self showQRCodeForValue:manager.remoteAddress title:@"WebリモコンURL"]; }
+    if (indexPath.section == 1 && indexPath.row == 2 && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) { UIPasteboard.generalPasteboard.string = manager.pairingCode; [self showQRCodeForValue:manager.pairingCode title:@"この端末の登録コード"]; }
     if (indexPath.section == 2 && indexPath.row == 0) [manager retryTransfer];
-    if (indexPath.section == 2 && indexPath.row == 1) [self.navigationController pushViewController:[WJVideoLibrary new] animated:YES];
     if ((indexPath.section == 1 && indexPath.row == 4) || indexPath.section == 3) {
         NSDictionary *peer = indexPath.section == 3 ? manager.discoveredPeers[indexPath.row] : nil;
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"転送先登録" message:@"iPadの設定画面に表示された登録コードを入力・貼り付けしてください。" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"登録コード"; field.autocorrectionType = UITextAutocorrectionTypeNo; field.autocapitalizationType = UITextAutocapitalizationTypeNone; }];
-        [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"登録" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            NSString *code = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-            BOOL matches = !peer || [code hasPrefix:[peer[@"id"] stringByAppendingString:@":"]];
-            if (!matches || ![manager registerPeer:peer[@"name"] ?: @"登録済みiPad" code:code]) {
-                UIAlertController *error = [UIAlertController alertControllerWithTitle:@"登録できません" message:@"選択した端末の登録コードを確認してください。" preferredStyle:UIAlertControllerStyleAlert];
-                [error addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:error animated:YES completion:nil];
-            }
-        }]];
-        [self presentViewController:alert animated:YES completion:nil];
+        [self presentPeerScanner:peer];
     }
     if (indexPath.section == 1 && indexPath.row == 5) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"2台目撮影用iPhone" message:@"2台目iPhoneでRemote CameraをONにして表示されたURL（末尾の#を含む）を入力してください。START/STOPをメイン端末から同期送信します。" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"http://192.168.x.x:8765/#..."; field.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"]; field.autocorrectionType = UITextAutocorrectionTypeNo; field.autocapitalizationType = UITextAutocapitalizationTypeNone; }];
-        [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            NSString *url = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-            if (url.length) [[NSUserDefaults standardUserDefaults] setObject:url forKey:@"WJSubCameraURL"]; else [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WJSubCameraURL"];
-            [self refresh];
-        }]];
-        [self presentViewController:alert animated:YES completion:nil];
+        [self presentSubCameraScanner];
     }
 }
 @end

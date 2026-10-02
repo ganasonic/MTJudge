@@ -380,8 +380,8 @@
     ]];
     self.featureControlContainer = [[UIView alloc] init];
     self.featureControlContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    self.featureControlContainer.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
-    self.featureControlContainer.layer.cornerRadius = 12;
+    self.featureControlContainer.backgroundColor = UIColor.clearColor;
+    self.featureControlContainer.layer.cornerRadius = 0;
     self.featureControlContainer.hidden = YES;
     [host addSubview:self.featureControlContainer];
     self.loopStartButton = [self featureButtonWithSymbol:@"a.circle" action:@selector(setLoopStart:) label:@"A点を設定"];
@@ -605,7 +605,10 @@
     [self.speedControlHost bringSubviewToFront:self.closeButton];
     [self.speedControlHost bringSubviewToFront:self.favoriteIndicator];
     [self.speedHideTimer invalidate];
-    self.speedHideTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self selector:@selector(hideSpeedControls) userInfo:nil repeats:NO];
+    // A点を設定した後は、B点を設定するまで操作列を消さない。
+    if (!(CMTIME_IS_VALID(self.loopStartTime) && !CMTIME_IS_VALID(self.loopEndTime))) {
+        self.speedHideTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self selector:@selector(hideSpeedControls) userInfo:nil repeats:NO];
+    }
 }
 
 - (void)hideSpeedControls {
@@ -652,6 +655,9 @@
 - (void)positionSliderChanged:(UISlider *)slider {
     double duration = CMTimeGetSeconds(self.player.currentItem.duration);
     if (!isfinite(duration) || duration <= 0) return;
+    // シーク操作中のつまみの揺れを防ぐため、最初のタップ時点で停止する。
+    [self.player pause];
+    [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
     CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600);
     [self.player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
     [self showSpeedControls];
@@ -744,6 +750,8 @@
         self.loopEndTime = kCMTimeInvalid;
         self.loopEnabled = NO;
     }
+    [self.speedHideTimer invalidate];
+    self.speedHideTimer = nil;
     [self refreshFeatureButtons];
 }
 
@@ -754,6 +762,7 @@
     self.loopEndTime = current;
     self.loopEnabled = YES;
     [self refreshFeatureButtons];
+    [self showSpeedControls];
 }
 
 - (void)toggleLoop:(id)sender {

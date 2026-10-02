@@ -154,16 +154,22 @@
     self.requestedZoom = 1.0;
     [self setupCameraControls];
     UIButton *remote = [self cameraButtonWithAction:@selector(openWaterJump)];
-    [self styleButton:remote title:@"ウォータージャンプ設定" symbol:@"antenna.radiowaves.left.and.right" color:UIColor.darkGrayColor];
+    [self styleButton:remote title:@"ウォータージャンプ設定" symbol:@"gearshape.fill" color:UIColor.darkGrayColor];
     remote.accessibilityIdentifier = @"WJSettingsButton";
     remote.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:remote];
+    UIButton *album = [self cameraButtonWithAction:@selector(openSavedVideos)];
+    [self styleButton:album title:@"保存動画一覧" symbol:@"photo.on.rectangle" color:UIColor.systemBlueColor];
+    album.accessibilityIdentifier = @"SavedVideosButton";
+    album.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:album];
     self.waterJumpStatus = [UILabel new]; self.waterJumpStatus.translatesAutoresizingMaskIntoConstraints = NO;
     self.waterJumpStatus.accessibilityIdentifier = @"WJStatusLabel";
     self.waterJumpStatus.numberOfLines = 3; self.waterJumpStatus.font = [UIFont systemFontOfSize:11];
     self.waterJumpStatus.textColor = UIColor.whiteColor; self.waterJumpStatus.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
     [self.view addSubview:self.waterJumpStatus];
     [NSLayoutConstraint activateConstraints:@[
-        [remote.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [album.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [album.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+        [remote.topAnchor constraintEqualToAnchor:album.bottomAnchor constant:4],
         [remote.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
         [self.waterJumpStatus.topAnchor constraintEqualToAnchor:remote.bottomAnchor constant:4],
         [self.waterJumpStatus.leadingAnchor constraintEqualToAnchor:remote.leadingAnchor],
@@ -189,6 +195,12 @@
             [self updateCameraControls];
         });
     });
+}
+
+- (void)openSavedVideos {
+    if (self.recordingController.busy || self.presentedViewController) return;
+    UIViewController *library = [WaterJumpSettingsViewController videoLibraryViewController];
+    [self presentViewController:[[UINavigationController alloc] initWithRootViewController:library] animated:YES completion:nil];
 }
 
 - (void)openWaterJump {
@@ -295,10 +307,11 @@
                 NSString *name = [[selection[@"name"] componentsSeparatedByCharactersInSet:unsafe] componentsJoinedByString:@"-"];
                 [names addObject:[name substringToIndex:MIN(name.length, 24)]];
             }
-            NSString *suffix = NSUUID.UUID.UUIDString;
+            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmss";
+            NSString *suffix = [formatter stringFromDate:[NSDate date]];
             NSString *prefix = [names componentsJoinedByString:@"_"];
             prefix = [prefix substringToIndex:MIN(prefix.length, 60)];
-            NSURL *taggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.mov", prefix, suffix]];
+            NSURL *taggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.MOV", prefix, suffix]];
             if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:taggedURL error:&error]) {
                 self.pendingRecordingURL = taggedURL;
                 self.latestRecordingURL = taggedURL;
@@ -307,7 +320,9 @@
                 [[NSUserDefaults standardUserDefaults] setObject:selections forKey:@"LatestCameraRecordingTags"];
             }
         } else if (!self.pendingAutomaticMetadata) {
-            NSURL *untaggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"mov"]];
+            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmss";
+            NSString *timestamp = [formatter stringFromDate:[NSDate date]];
+            NSURL *untaggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"MTJ%@.MOV", timestamp]];
             if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:untaggedURL error:&error]) {
                 self.pendingRecordingURL = untaggedURL;
                 self.latestRecordingURL = untaggedURL;
@@ -379,7 +394,8 @@
 - (void)savePendingWithoutTags {
     if (!self.pendingRecordingURL) return;
     NSURL *url = self.pendingRecordingURL;
-    NSURL *target = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"mov"]];
+    NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmss";
+    NSURL *target = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"MTJ%@.MOV", [formatter stringFromDate:[NSDate date]]]];
     NSError *error = nil;
     if (![url isEqual:target] && [[NSFileManager defaultManager] fileExistsAtPath:url.path]) {
         if (![[NSFileManager defaultManager] moveItemAtURL:url toURL:target error:&error]) target = url;
