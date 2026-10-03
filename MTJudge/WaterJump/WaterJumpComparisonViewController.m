@@ -1,6 +1,15 @@
 #import "WaterJumpComparisonViewController.h"
 #import <AVFoundation/AVFoundation.h>
 
+static CGSize WJOrientedTrackSize(AVAssetTrack *track) {
+    CGRect rect = CGRectApplyAffineTransform(CGRectMake(0, 0, fabs(track.naturalSize.width), fabs(track.naturalSize.height)), track.preferredTransform);
+    return CGSizeMake(fabs(rect.size.width), fabs(rect.size.height));
+}
+static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
+    CGRect rect = CGRectApplyAffineTransform(CGRectMake(0, 0, fabs(track.naturalSize.width), fabs(track.naturalSize.height)), track.preferredTransform);
+    CGAffineTransform t = track.preferredTransform; t.tx -= rect.origin.x; t.ty -= rect.origin.y; return t;
+}
+
 @interface WaterJumpComparisonViewController ()
 @property (nonatomic, strong) NSURL *mainURL;
 @property (nonatomic, strong) NSURL *subURL;
@@ -24,6 +33,7 @@
 @property (nonatomic, strong) UIButton *mainMirrorButton;
 @property (nonatomic, strong) UIButton *subMirrorButton;
 @property (nonatomic, strong) UIButton *shareButton;
+@property (nonatomic, strong) UIButton *exportButton;
 @property (nonatomic, strong) UIButton *favoriteButton;
 @property (nonatomic, assign) CMTime loopStart;
 @property (nonatomic, assign) CMTime loopEnd;
@@ -79,6 +89,7 @@
     self.playButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; self.playButton.tintColor = UIColor.whiteColor; [self.playButton addTarget:self action:@selector(togglePlay:) forControlEvents:UIControlEventTouchUpInside];
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem]; [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill"] forState:UIControlStateNormal]; close.tintColor = UIColor.whiteColor; [close addTarget:self action:@selector(close) forControlEvents:UIControlEventTouchUpInside];
     self.shareButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.shareButton setImage:[UIImage systemImageNamed:@"square.and.arrow.up"] forState:UIControlStateNormal]; self.shareButton.tintColor = UIColor.whiteColor; [self.shareButton addTarget:self action:@selector(shareVideos:) forControlEvents:UIControlEventTouchUpInside];
+    self.exportButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.exportButton setImage:[UIImage systemImageNamed:@"square.and.arrow.down"] forState:UIControlStateNormal]; self.exportButton.tintColor = UIColor.whiteColor; self.exportButton.accessibilityLabel = @"比較動画を書き出す"; [self.exportButton addTarget:self action:@selector(exportComparisonVideo:) forControlEvents:UIControlEventTouchUpInside];
     self.favoriteButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.favoriteButton setImage:[UIImage systemImageNamed:@"heart"] forState:UIControlStateNormal]; self.favoriteButton.tintColor = UIColor.whiteColor; [self.favoriteButton addTarget:self action:@selector(toggleFavorites:) forControlEvents:UIControlEventTouchUpInside];
     self.linkButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.linkButton setImage:[UIImage systemImageNamed:@"link"] forState:UIControlStateNormal]; self.linkButton.tintColor = UIColor.systemGreenColor; self.linkButton.backgroundColor = [UIColor colorWithWhite:0 alpha:.45]; self.linkButton.layer.cornerRadius = 18; self.linkButton.layer.borderWidth = 0; self.linkButton.accessibilityLabel = @"2画面シーク連動"; [self.linkButton addTarget:self action:@selector(toggleLink:) forControlEvents:UIControlEventTouchUpInside];
     self.mainBackButton = [self transportButton:@"backward.frame" action:@selector(individualTransport:) tag:1];
@@ -97,7 +108,7 @@
     self.frameButton = [self featureButton:@"▸|" action:@selector(stepFrame:)];
     self.mainMirrorButton = [self featureButton:@"M1" action:@selector(toggleMainMirror:)];
     self.subMirrorButton = [self featureButton:@"M2" action:@selector(toggleSubMirror:)];
-    for (UIView *view in @[self.positionSlider, self.mainPositionSlider, self.subPositionSlider, self.speedSlider, self.playButton, close, self.shareButton, self.favoriteButton, self.linkButton, self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton, self.syncPointButton, self.syncBackButton, self.syncForwardButton, layoutButton, self.aButton, self.bButton, self.loopButton, self.mainMirrorButton, self.subMirrorButton]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
+    for (UIView *view in @[self.positionSlider, self.mainPositionSlider, self.subPositionSlider, self.speedSlider, self.playButton, close, self.shareButton, self.exportButton, self.favoriteButton, self.linkButton, self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton, self.syncPointButton, self.syncBackButton, self.syncForwardButton, layoutButton, self.aButton, self.bButton, self.loopButton, self.mainMirrorButton, self.subMirrorButton]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
     self.frameButton.hidden = YES;
     self.positionSlider.accessibilityLabel = @"比較再生位置"; self.speedSlider.accessibilityLabel = @"比較再生速度";
     self.bottomControlGuide = [UILayoutGuide new];
@@ -116,6 +127,7 @@
         [close.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [close.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4], [close.widthAnchor constraintEqualToConstant:44], [close.heightAnchor constraintEqualToConstant:44],
         [self.favoriteButton.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-4], [self.favoriteButton.topAnchor constraintEqualToAnchor:close.topAnchor], [self.favoriteButton.widthAnchor constraintEqualToConstant:44], [self.favoriteButton.heightAnchor constraintEqualToConstant:44],
         [self.shareButton.trailingAnchor constraintEqualToAnchor:self.favoriteButton.leadingAnchor constant:-4], [self.shareButton.topAnchor constraintEqualToAnchor:close.topAnchor], [self.shareButton.widthAnchor constraintEqualToConstant:44], [self.shareButton.heightAnchor constraintEqualToConstant:44],
+        [self.exportButton.trailingAnchor constraintEqualToAnchor:self.shareButton.leadingAnchor constant:-4], [self.exportButton.topAnchor constraintEqualToAnchor:close.topAnchor], [self.exportButton.widthAnchor constraintEqualToConstant:44], [self.exportButton.heightAnchor constraintEqualToConstant:44],
         [layoutButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12], [layoutButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4], [layoutButton.widthAnchor constraintEqualToConstant:44], [layoutButton.heightAnchor constraintEqualToConstant:44]
     ]];
     self.mainLabel.translatesAutoresizingMaskIntoConstraints = YES;
@@ -162,6 +174,58 @@
 - (void)toggleSubMirror:(id)sender { self.subMirrored = !self.subMirrored; self.subLayer.affineTransform = self.subMirrored ? CGAffineTransformMakeScale(-1, 1) : CGAffineTransformIdentity; [self.subMirrorButton setImage:[UIImage systemImageNamed:(self.subMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (void)shareVideos:(id)sender { UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[self.mainURL, self.subURL] applicationActivities:nil]; if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = sender; activity.popoverPresentationController.sourceRect = [sender bounds]; } [self presentViewController:activity animated:YES completion:nil]; }
+- (void)exportComparisonVideo:(id)sender {
+    AVAsset *mainAsset = [AVAsset assetWithURL:self.mainURL], *subAsset = [AVAsset assetWithURL:self.subURL];
+    AVAssetTrack *mainTrack = [mainAsset tracksWithMediaType:AVMediaTypeVideo].firstObject, *subTrack = [subAsset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    if (!mainTrack || !subTrack) return;
+    // リンクを有効にした時点のMAIN/SUB位置をそれぞれの基準にする。
+    // 書き出しはリンクポイントの2秒前から開始し、短い方の終端で終了する。
+    BOOL useLinkedRange = self.hasLinkedAnchors && CMTIME_IS_VALID(self.linkedMainAnchor) && CMTIME_IS_VALID(self.linkedSubAnchor);
+    double mainStartSeconds = useLinkedRange ? MAX(0.0, CMTimeGetSeconds(self.linkedMainAnchor) - 2.0) : 0.0;
+    double subStartSeconds = useLinkedRange ? MAX(0.0, CMTimeGetSeconds(self.linkedSubAnchor) - 2.0) : 0.0;
+    double mainDurationSeconds = CMTimeGetSeconds(mainAsset.duration), subDurationSeconds = CMTimeGetSeconds(subAsset.duration);
+    double outputDurationSeconds = useLinkedRange ? MIN(MAX(0.0, mainDurationSeconds - mainStartSeconds), MAX(0.0, subDurationSeconds - subStartSeconds)) : MIN(mainDurationSeconds, subDurationSeconds);
+    if (!isfinite(outputDurationSeconds) || outputDurationSeconds <= 0) { [self showExportError:[NSError errorWithDomain:@"MTJudge.Export" code:3 userInfo:@{NSLocalizedDescriptionKey:@"同期位置から書き出せる区間がありません。"}]]; return; }
+    CMTime mainStart = CMTimeMakeWithSeconds(mainStartSeconds, 600), subStart = CMTimeMakeWithSeconds(subStartSeconds, 600), duration = CMTimeMakeWithSeconds(outputDurationSeconds, 600);
+    AVMutableComposition *composition = [AVMutableComposition composition];
+    AVMutableCompositionTrack *mainComp = [composition addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid];
+    AVMutableCompositionTrack *subComp = [composition addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid];
+    AVAssetTrack *mainAudioTrack = [mainAsset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+    AVAssetTrack *subAudioTrack = [subAsset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+    AVMutableCompositionTrack *mainAudioComp = mainAudioTrack ? [composition addMutableTrackWithMediaType:AVMediaTypeAudio preferredTrackID:kCMPersistentTrackID_Invalid] : nil;
+    AVMutableCompositionTrack *subAudioComp = subAudioTrack ? [composition addMutableTrackWithMediaType:AVMediaTypeAudio preferredTrackID:kCMPersistentTrackID_Invalid] : nil;
+    NSError *error = nil;
+    [mainComp insertTimeRange:CMTimeRangeMake(mainStart, duration) ofTrack:mainTrack atTime:kCMTimeZero error:&error];
+    [subComp insertTimeRange:CMTimeRangeMake(subStart, duration) ofTrack:subTrack atTime:kCMTimeZero error:&error];
+    if (mainAudioComp) [mainAudioComp insertTimeRange:CMTimeRangeMake(mainStart, duration) ofTrack:mainAudioTrack atTime:kCMTimeZero error:&error];
+    if (subAudioComp) [subAudioComp insertTimeRange:CMTimeRangeMake(subStart, duration) ofTrack:subAudioTrack atTime:kCMTimeZero error:&error];
+    if (error) { [self showExportError:error]; return; }
+    CGSize mainSize = WJOrientedTrackSize(mainTrack);
+    CGSize subSize = WJOrientedTrackSize(subTrack);
+    CGSize render = self.sideBySide ? CGSizeMake(mainSize.width + subSize.width, MAX(mainSize.height, subSize.height)) : CGSizeMake(MAX(mainSize.width, subSize.width), mainSize.height + subSize.height);
+    AVMutableVideoComposition *videoComposition = [AVMutableVideoComposition videoComposition];
+    videoComposition.renderSize = render; videoComposition.frameDuration = CMTimeMake(1, 30);
+    AVMutableVideoCompositionInstruction *instruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction]; instruction.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
+    AVMutableVideoCompositionLayerInstruction *mainInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:mainComp];
+    AVMutableVideoCompositionLayerInstruction *subInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:subComp];
+    CGAffineTransform mainTransform = WJNormalizedTrackTransform(mainTrack), subTransform = WJNormalizedTrackTransform(subTrack);
+    if (self.sideBySide) subTransform = CGAffineTransformConcat(subTransform, CGAffineTransformMakeTranslation(mainSize.width, 0));
+    else subTransform = CGAffineTransformConcat(subTransform, CGAffineTransformMakeTranslation(0, mainSize.height));
+    [mainInstruction setTransform:mainTransform atTime:kCMTimeZero]; [subInstruction setTransform:subTransform atTime:kCMTimeZero]; instruction.layerInstructions = @[mainInstruction, subInstruction]; videoComposition.instructions = @[instruction];
+    NSMutableArray *audioParameters = [NSMutableArray array];
+    if (mainAudioComp) { AVMutableAudioMixInputParameters *p = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:mainAudioComp]; [p setVolume:subAudioComp ? 0.5 : 1.0 atTime:kCMTimeZero]; [audioParameters addObject:p]; }
+    if (subAudioComp) { AVMutableAudioMixInputParameters *p = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:subAudioComp]; [p setVolume:mainAudioComp ? 0.5 : 1.0 atTime:kCMTimeZero]; [audioParameters addObject:p]; }
+    NSString *name = [NSString stringWithFormat:@"MTJCompare_%@.MOV", [self exportTimestamp]];
+    NSURL *output = [[self exportDirectoryURL] URLByAppendingPathComponent:name];
+    [[NSFileManager defaultManager] removeItemAtURL:output error:nil];
+    AVAssetExportSession *session = [[AVAssetExportSession alloc] initWithAsset:composition presetName:AVAssetExportPresetHighestQuality]; session.outputURL = output; session.outputFileType = AVFileTypeQuickTimeMovie; session.videoComposition = videoComposition; if (audioParameters.count) { AVMutableAudioMix *audioMix = [AVMutableAudioMix audioMix]; audioMix.inputParameters = audioParameters; session.audioMix = audioMix; } session.shouldOptimizeForNetworkUse = NO;
+    self.exportButton.enabled = NO;
+    [session exportAsynchronouslyWithCompletionHandler:^{ dispatch_async(dispatch_get_main_queue(), ^{ self.exportButton.enabled = YES; if (session.status == AVAssetExportSessionStatusCompleted) [self presentExportedFile:output from:self.exportButton]; else [self showExportError:session.error ?: [NSError errorWithDomain:@"MTJudge.Export" code:1 userInfo:@{NSLocalizedDescriptionKey:@"比較動画を書き出せませんでした。"}]]; }); }];
+}
+- (NSString *)exportTimestamp { NSDateFormatter *f = [NSDateFormatter new]; f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; f.dateFormat = @"yyyyMMddHHmmssSSS"; return [f stringFromDate:[NSDate date]]; }
+- (NSURL *)exportDirectoryURL { NSURL *u = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject]; u = [u URLByAppendingPathComponent:@"Recordings" isDirectory:YES]; [[NSFileManager defaultManager] createDirectoryAtURL:u withIntermediateDirectories:YES attributes:nil error:nil]; return u; }
+- (void)presentExportedFile:(NSURL *)url from:(UIView *)source { UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil]; if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = source; activity.popoverPresentationController.sourceRect = source.bounds; } [self presentViewController:activity animated:YES completion:nil]; }
+- (void)showExportError:(NSError *)error { UIAlertController *a = [UIAlertController alertControllerWithTitle:@"書き出し失敗" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert]; [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:a animated:YES completion:nil]; }
 - (void)toggleFavorites:(id)sender { NSMutableArray *paths = [NSMutableArray arrayWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] ?: @[]]; BOOL selected = [paths containsObject:self.mainURL.path] && [paths containsObject:self.subURL.path]; if (selected) { [paths removeObject:self.mainURL.path]; [paths removeObject:self.subURL.path]; } else { if (![paths containsObject:self.mainURL.path]) [paths addObject:self.mainURL.path]; if (![paths containsObject:self.subURL.path]) [paths addObject:self.subURL.path]; } [[NSUserDefaults standardUserDefaults] setObject:paths forKey:@"WJFavoriteVideoPaths"]; [self.favoriteButton setImage:[UIImage systemImageNamed:(selected ? @"heart" : @"heart.fill")] forState:UIControlStateNormal]; self.favoriteButton.tintColor = selected ? UIColor.whiteColor : UIColor.systemPinkColor; }
 - (void)dealloc { if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; }
 @end

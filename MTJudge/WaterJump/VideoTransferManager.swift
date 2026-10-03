@@ -16,6 +16,9 @@ import Network
     private var input: FileHandle?
     private var activeID: String?
     private var activeFilename: String?
+    private var relatedInputs: [(url: URL, suffix: String, size: Int64)] = []
+    private var relatedIndex = 0
+    private var relatedHandle: FileHandle?
     private var receiver: VideoReceiver?
     private var receiving = false
     private var retryTimer: Timer?
@@ -99,6 +102,17 @@ import Network
         _ = persist()
         state = "WAITING_TRANSFER"; message = "再転送待ち"; changed?(); pump()
     }
+    private func relatedMetadata(for url: URL) -> [[String: Any]] {
+        let directory = url.deletingLastPathComponent()
+        let prefix = url.lastPathComponent + "."
+        let entries = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return entries.compactMap { entry in
+            guard entry.lastPathComponent.hasPrefix(prefix), entry.pathExtension.lowercased() == "json",
+                  let size = try? entry.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0,
+                  let hash = try? ReceivedVideoManager.digest(entry) else { return nil }
+            return ["name": String(entry.lastPathComponent.dropFirst(url.lastPathComponent.count)), "size": size, "sha256": hash]
+        }.sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+    }
     private func publish(_ state: String, _ message: String, _ progress: Double) {
         DispatchQueue.main.async { self.state = state; self.message = message; self.progress = progress; self.changed?() }
     }
@@ -130,6 +144,13 @@ import Network
                 guard persist() else { return }
             } catch { state = "TRANSFER_FAILED"; message = "転送先を保存できません"; changed?(); return }
         }
+        let related = relatedMetadata(for: url)
+        relatedInputs = related.compactMap { entry in
+            guard let suffix = entry["name"] as? String, let size = (entry["size"] as? NSNumber)?.int64Value else { return nil }
+            return (url: url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + suffix), suffix: suffix, size: size)
+        }
+        relatedIndex = 0; try? relatedHandle?.close(); relatedHandle = nil
+        var transferInfo = info; transferInfo["relatedFiles"] = related
         activeID = id; state = "TRANSFERRING"; message = "iPadへ転送中..."; progress = 0; changed?()
         io.async {
             let wire = TransferChannel(connection, queue:self.io); self.channel = wire
@@ -138,9 +159,9 @@ import Network
                 guard let self = self, let wire = wire else { return }
                 do {
                     self.input = try FileHandle(forReadingFrom:url)
-                    wire.sendJSON(info) {
+                    wire.sendJSON(transferInfo) {
                         wire.receiveJSON { response in
-                            if response["state"] as? String == "READY" { self.sendChunk(id, total:(info["size"] as? NSNumber)?.int64Value ?? 0, sent:0) }
+                            if response["state"] as? String == "READY" { self.sendChunk(id, info: transferInfo, total:(transferInfo["size"] as? NSNumber)?.int64Value ?? 0, sent:0) }
                             else { wire.fail(ReceivedVideoManager.failure(response["error"] as? String ?? "受信端末が動画を受け付けませんでした")) }
                         }
                     }
@@ -148,10 +169,11 @@ import Network
             }
         }
     }
-    private func sendChunk(_ id: String, total: Int64, sent: Int64) {
+    private func sendChunk(_ id: String, info: [String: Any], total: Int64, sent: Int64) {
         guard let wire = channel, let file = input else { return }
         if sent == total {
-            wire.receiveJSON { response in
+            sendRelated(id, info: info) {
+                wire.receiveJSON { response in
                 if response["state"] as? String == "TRANSFERRED", response["id"] as? String == id {
                     do {
                         let filename = self.activeFilename ?? (id + ".mov")
@@ -163,6 +185,7 @@ import Network
                     } catch { wire.fail(error) }
                 }
                 else { wire.fail(ReceivedVideoManager.failure(response["error"] as? String ?? "受信完了を確認できません。再送してください。")) }
+                }
             }
             return
         }
@@ -172,12 +195,27 @@ import Network
                 let count = sent + Int64(data.count)
                 let percent = Int(count * 100 / max(total,1)), old = Int(sent * 100 / max(total,1))
                 if percent != old { self.publish("TRANSFERRING", "iPadへ転送中... \(percent)%", Double(count)/Double(total)) }
-                self.sendChunk(id, total:total, sent:count)
+                self.sendChunk(id, info: info, total:total, sent:count)
             }
         } catch { wire.fail(error) }
     }
+    private func sendRelated(_ id: String, info: [String: Any], completion: @escaping () -> Void) {
+        guard let wire = channel else { return }
+        guard relatedIndex < relatedInputs.count else { completion(); return }
+        let input = relatedInputs[relatedIndex]
+        if relatedHandle == nil { relatedHandle = try? FileHandle(forReadingFrom: input.url) }
+        guard let handle = relatedHandle else { wire.fail(ReceivedVideoManager.failure("関連JSONを読み込めません。")); return }
+        do {
+            let sent = (try handle.offsetInFile)
+            if sent >= UInt64(input.size) {
+                try? handle.close(); relatedHandle = nil; relatedIndex += 1; sendRelated(id, info: info, completion: completion); return
+            }
+            guard let data = try handle.read(upToCount: Int(min(65536, UInt64(input.size) - sent))), !data.isEmpty else { throw ReceivedVideoManager.failure("関連JSONを読み込めません。") }
+            wire.send(data) { self.sendRelated(id, info: info, completion: completion) }
+        } catch { wire.fail(error) }
+    }
     private func finish(_ id: String, error: Error?) {
-        channel?.close(); channel = nil; try? input?.close(); input = nil; activeFilename = nil
+        channel?.close(); channel = nil; try? input?.close(); input = nil; try? relatedHandle?.close(); relatedHandle = nil; relatedInputs.removeAll(); relatedIndex = 0; activeFilename = nil
         DispatchQueue.main.async {
             guard self.activeID == id else { return }; self.activeID = nil
             if let error = error { self.state = "TRANSFER_FAILED"; self.message = "転送失敗: \(error.localizedDescription) 元動画は保存済みです。" }

@@ -5,7 +5,168 @@
 #import "../Analysis/TakeoffAnalysisConfig.h"
 #import "../Analysis/TakeoffAngleAnalyzer.h"
 
-@interface WaterJumpReceivedPlayerViewController ()
+static CGSize WJDrawingOrientedTrackSize(AVAssetTrack *track) {
+    CGRect rect = CGRectApplyAffineTransform(CGRectMake(0, 0, fabs(track.naturalSize.width), fabs(track.naturalSize.height)), track.preferredTransform);
+    return CGSizeMake(fabs(rect.size.width), fabs(rect.size.height));
+}
+static CGAffineTransform WJDrawingNormalizedTrackTransform(AVAssetTrack *track) {
+    CGRect rect = CGRectApplyAffineTransform(CGRectMake(0, 0, fabs(track.naturalSize.width), fabs(track.naturalSize.height)), track.preferredTransform);
+    CGAffineTransform t = track.preferredTransform; t.tx -= rect.origin.x; t.ty -= rect.origin.y; return t;
+}
+
+static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
+    if (!videoURL) return @[];
+    NSMutableArray<NSURL *> *targets = [NSMutableArray arrayWithObject:videoURL];
+    NSURL *directory = [videoURL URLByDeletingLastPathComponent];
+    NSString *prefix = [videoURL.lastPathComponent stringByAppendingString:@"."];
+    NSArray<NSURL *> *entries = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:directory includingPropertiesForKeys:nil options:0 error:nil];
+    for (NSURL *entry in entries) if ([entry.lastPathComponent hasPrefix:prefix] && [entry.lastPathComponent.lowercaseString hasSuffix:@".json"]) [targets addObject:entry];
+    return targets;
+}
+
+@interface WJDrawingCanvas : UIView
+@property (nonatomic, copy) NSArray<NSDictionary *> *annotations;
+@property (nonatomic, assign) CMTime currentTime;
+@property (nonatomic, assign) BOOL drawingEnabled;
+@property (nonatomic, copy) NSString *tool;
+@property (nonatomic, copy) NSString *drawingText;
+@property (nonatomic, strong) UIColor *foregroundColor;
+@property (nonatomic, strong) UIColor *backgroundColorForDrawing;
+@property (nonatomic, copy) void (^commitBlock)(NSArray<NSValue *> *points);
+@property (nonatomic, copy) void (^tapBlock)(CGPoint point);
+@end
+
+@implementation WJDrawingCanvas {
+    NSMutableArray<NSValue *> *_activePoints;
+}
+- (instancetype)initWithFrame:(CGRect)frame { if ((self = [super initWithFrame:frame])) { self.backgroundColor = UIColor.clearColor; self.userInteractionEnabled = NO; self.foregroundColor = UIColor.yellowColor; self.tool = @"直線"; _activePoints = [NSMutableArray array]; } return self; }
+- (void)setAnnotations:(NSArray<NSDictionary *> *)annotations { _annotations = [annotations copy]; [self setNeedsDisplay]; }
+- (void)setCurrentTime:(CMTime)currentTime { _currentTime = currentTime; [self setNeedsDisplay]; }
+- (BOOL)visible:(NSDictionary *)item { double now = CMTimeGetSeconds(self.currentTime), start = [item[@"start"] doubleValue], end = item[@"end"] == [NSNull null] ? CGFLOAT_MAX : [item[@"end"] doubleValue]; if (!isfinite(now) || !isfinite(start)) return NO; return now + .03 >= start && now <= end + .03; }
+- (CGPoint)pointFromValue:(NSArray *)value { return CGPointMake([value[0] doubleValue] * self.bounds.size.width, [value[1] doubleValue] * self.bounds.size.height); }
+- (void)drawReversedText:(NSString *)text atPoint:(CGPoint)point color:(UIColor *)background inContext:(CGContextRef)ctx {
+    if (!text.length) return;
+    NSDictionary *measureAttributes = @{NSFontAttributeName:[UIFont boldSystemFontOfSize:18]};
+    CGSize size = [text sizeWithAttributes:measureAttributes];
+    CGRect box = CGRectInset(CGRectMake(point.x, point.y, size.width + 12, size.height + 6), -0.5, -0.5);
+    CGContextSaveGState(ctx);
+    CGContextSetFillColorWithColor(ctx, [background colorWithAlphaComponent:.92].CGColor);
+    CGContextAddPath(ctx, [UIBezierPath bezierPathWithRoundedRect:box cornerRadius:6].CGPath);
+    CGContextFillPath(ctx);
+    CGFloat red = 0, green = 0, blue = 0, alpha = 1; [background getRed:&red green:&green blue:&blue alpha:&alpha];
+    BOOL useBlackText = ((red > .75 && green > .75 && blue < .35) || (green > .65 && red < .35 && blue < .35) || (red > .82 && green > .82 && blue > .82));
+    UIColor *textColor = useBlackText ? UIColor.blackColor : UIColor.whiteColor;
+    [text drawAtPoint:CGPointMake(box.origin.x + 6, box.origin.y + 3) withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:18], NSForegroundColorAttributeName:textColor}];
+    CGContextRestoreGState(ctx);
+}
+- (void)drawAnnotation:(NSDictionary *)item inContext:(CGContextRef)ctx { NSArray *values = item[@"points"]; if (values.count < 1) return; NSMutableArray<NSValue *> *points = [NSMutableArray array]; for (NSArray *v in values) [points addObject:[NSValue valueWithCGPoint:[self pointFromValue:v]]]; UIColor *color = [UIColor colorWithRed:[item[@"r"] doubleValue] green:[item[@"g"] doubleValue] blue:[item[@"b"] doubleValue] alpha:[item[@"a"] doubleValue]]; CGContextSetStrokeColorWithColor(ctx, color.CGColor); CGContextSetFillColorWithColor(ctx, [UIColor colorWithRed:[item[@"br"] doubleValue] green:[item[@"bg"] doubleValue] blue:[item[@"bb"] doubleValue] alpha:[item[@"ba"] doubleValue]].CGColor); CGContextSetLineWidth(ctx, [item[@"width"] doubleValue] > 0 ? [item[@"width"] doubleValue] : 3.0); if ([item[@"style"] isEqualToString:@"点線"]) { CGFloat pattern[] = {4, 4}; CGContextSetLineDash(ctx, 0, pattern, 2); } else if ([item[@"style"] isEqualToString:@"鎖線"]) { CGFloat pattern[] = {12, 8}; CGContextSetLineDash(ctx, 0, pattern, 2); } else { CGContextSetLineDash(ctx, 0, NULL, 0); }
+    NSString *tool = item[@"tool"] ?: @"直線"; CGPoint first = points.firstObject.CGPointValue; CGPoint last = points.lastObject.CGPointValue;
+    if ([tool isEqualToString:@"丸"]) {
+        CGFloat radius = hypot(last.x-first.x, last.y-first.y);
+        UIColor *fill = [color colorWithAlphaComponent:0.20];
+        CGContextSetFillColorWithColor(ctx, fill.CGColor);
+        CGContextFillEllipseInRect(ctx, CGRectMake(first.x-radius, first.y-radius, radius*2, radius*2));
+    }
+    else if ([tool isEqualToString:@"楕円"] || [tool isEqualToString:@"四角"] || [tool isEqualToString:@"三角"]) {
+        CGRect rect = CGRectStandardize(CGRectMake(first.x, first.y, last.x-first.x, last.y-first.y)); CGFloat angle = [item[@"rotation"] doubleValue]; CGPoint center = CGPointMake(CGRectGetMidX(rect), CGRectGetMidY(rect));
+        UIColor *fill = [color colorWithAlphaComponent:0.20];
+        CGContextSaveGState(ctx); CGContextTranslateCTM(ctx, center.x, center.y); CGContextRotateCTM(ctx, angle); CGContextTranslateCTM(ctx, -center.x, -center.y); CGContextSetFillColorWithColor(ctx, fill.CGColor);
+        if ([tool isEqualToString:@"楕円"]) CGContextFillEllipseInRect(ctx, rect);
+        else if ([tool isEqualToString:@"三角"]) { CGContextBeginPath(ctx); CGContextMoveToPoint(ctx, CGRectGetMidX(rect), CGRectGetMinY(rect)); CGContextAddLineToPoint(ctx, CGRectGetMaxX(rect), CGRectGetMaxY(rect)); CGContextAddLineToPoint(ctx, CGRectGetMinX(rect), CGRectGetMaxY(rect)); CGContextClosePath(ctx); CGContextFillPath(ctx); }
+        else CGContextFillRect(ctx, rect);
+        CGContextRestoreGState(ctx);
+    }
+    else if ([tool isEqualToString:@"x"]) { CGContextMoveToPoint(ctx, first.x-12, first.y-12); CGContextAddLineToPoint(ctx, first.x+12, first.y+12); CGContextMoveToPoint(ctx, first.x+12, first.y-12); CGContextAddLineToPoint(ctx, first.x-12, first.y+12); CGContextStrokePath(ctx); }
+    else if ([tool isEqualToString:@"角度"] && points.count >= 3) {
+        CGPoint p0 = points[0].CGPointValue, p1 = points[1].CGPointValue, p2 = points[2].CGPointValue;
+        CGContextMoveToPoint(ctx, p0.x, p0.y); CGContextAddLineToPoint(ctx, p1.x, p1.y); CGContextAddLineToPoint(ctx, p2.x, p2.y); CGContextStrokePath(ctx);
+        CGVector v0 = CGVectorMake(p0.x-p1.x, p0.y-p1.y), v1 = CGVectorMake(p2.x-p1.x, p2.y-p1.y);
+        CGFloat denominator = hypot(v0.dx, v0.dy) * hypot(v1.dx, v1.dy);
+        CGFloat angle = denominator > 0 ? acos(MAX(-1, MIN(1, (v0.dx*v1.dx + v0.dy*v1.dy) / denominator))) * 180.0 / M_PI : 0;
+        NSString *value = [NSString stringWithFormat:@"%.1f°", angle];
+        [self drawReversedText:value atPoint:CGPointMake(p1.x + 8, p1.y - 24) color:color inContext:ctx];
+    }
+    else if ([tool isEqualToString:@"フリー"]) {
+        CGContextMoveToPoint(ctx, first.x, first.y);
+        for (NSValue *v in points) CGContextAddLineToPoint(ctx, v.CGPointValue.x, v.CGPointValue.y);
+        CGContextStrokePath(ctx);
+    }
+    else if ([tool isEqualToString:@"直線"] && [item[@"category"] isEqualToString:@"基準"]) {
+        CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, last.x, last.y); CGContextStrokePath(ctx);
+        CGFloat dx=fabs(last.x-first.x), dy=fabs(last.y-first.y);
+        CGFloat diagonalAngle=atan2(dy, dx)*180.0/M_PI;
+        // 矩形の底辺方向（水平線）と対角線が作る内角を常に表示する。
+        CGFloat displayAngle=MAX(0.0, MIN(180.0, diagonalAngle));
+        NSString *value=[NSString stringWithFormat:@"%.1f°", displayAngle];
+        [self drawReversedText:value atPoint:CGPointMake(last.x+8, last.y-24) color:color inContext:ctx];
+    }
+    else if ([tool isEqualToString:@"直線"] && [item[@"category"] isEqualToString:@"対象"]) {
+        CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, last.x, last.y); CGContextStrokePath(ctx);
+        if (item[@"angle"]) {
+            NSString *value = [NSString stringWithFormat:@"%.1f°", [item[@"angle"] doubleValue]];
+            [self drawReversedText:value atPoint:CGPointMake((first.x+last.x)/2.0+6, (first.y+last.y)/2.0-22) color:color inContext:ctx];
+        }
+    }
+    else if ([tool isEqualToString:@"文字"]) {
+        NSString *text = item[@"text"] ?: @"";
+        if ([text isEqualToString:@"👍"] || [text isEqualToString:@"👎"]) { [text drawAtPoint:first withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:28], NSForegroundColorAttributeName:color}]; return; }
+        UIFont *font = [UIFont boldSystemFontOfSize:22];
+        CGSize textSize = [text sizeWithAttributes:@{NSFontAttributeName:font}];
+        CGFloat dx = last.x - first.x, dy = last.y - first.y;
+        CGPoint origin = CGPointMake(dx >= 0 ? last.x : last.x - textSize.width, dy >= 0 ? last.y : last.y - textSize.height);
+        CGPoint connect = CGPointMake(dx >= 0 ? origin.x : origin.x + textSize.width, dy >= 0 ? origin.y : origin.y + textSize.height);
+        CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, connect.x, connect.y); CGContextStrokePath(ctx);
+        CGFloat arrowAngle = atan2(connect.y-first.y, connect.x-first.x), arrowSize = 12;
+        CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x + arrowSize*cos(arrowAngle-M_PI/6), first.y + arrowSize*sin(arrowAngle-M_PI/6));
+        CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x + arrowSize*cos(arrowAngle+M_PI/6), first.y + arrowSize*sin(arrowAngle+M_PI/6)); CGContextStrokePath(ctx);
+        [text drawAtPoint:origin withAttributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:color}];
+    } else { CGContextMoveToPoint(ctx, first.x, first.y); for (NSValue *v in points) CGContextAddLineToPoint(ctx, v.CGPointValue.x, v.CGPointValue.y); CGContextStrokePath(ctx); if ([tool isEqualToString:@"矢印"] && points.count > 1) { CGFloat angle = atan2(last.y-first.y, last.x-first.x), size = 12; CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+size*cos(angle-M_PI/6), first.y+size*sin(angle-M_PI/6)); CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+size*cos(angle+M_PI/6), first.y+size*sin(angle+M_PI/6)); CGContextStrokePath(ctx); } }
+}
+- (void)drawPreviewInContext:(CGContextRef)ctx {
+    if (_activePoints.count < 1) return;
+    CGPoint first = _activePoints.firstObject.CGPointValue, last = _activePoints.lastObject.CGPointValue;
+    CGContextSetStrokeColorWithColor(ctx, self.foregroundColor.CGColor); CGContextSetLineWidth(ctx, 3.0);
+    NSString *tool = self.tool ?: @"直線";
+    UIColor *previewFill = self.foregroundColor;
+    if ([tool isEqualToString:@"文字"]) {
+        if (_activePoints.count > 1) {
+            NSString *text = self.drawingText ?: @""; UIFont *font = [UIFont boldSystemFontOfSize:22]; CGSize textSize = [text sizeWithAttributes:@{NSFontAttributeName:font}];
+            if ([text isEqualToString:@"👍"] || [text isEqualToString:@"👎"]) { [text drawAtPoint:first withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:28], NSForegroundColorAttributeName:self.foregroundColor}]; return; }
+            CGFloat dx = last.x-first.x, dy = last.y-first.y;
+            CGPoint origin = CGPointMake(dx >= 0 ? last.x : last.x-textSize.width, dy >= 0 ? last.y : last.y-textSize.height);
+            CGPoint connect = CGPointMake(dx >= 0 ? origin.x : origin.x+textSize.width, dy >= 0 ? origin.y : origin.y+textSize.height);
+            CGFloat a = atan2(connect.y-first.y, connect.x-first.x), s = 12;
+            CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, connect.x, connect.y);
+            CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+s*cos(a-M_PI/6), first.y+s*sin(a-M_PI/6));
+            CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+s*cos(a+M_PI/6), first.y+s*sin(a+M_PI/6)); CGContextStrokePath(ctx);
+            if (text.length) [text drawAtPoint:origin withAttributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:self.foregroundColor}];
+        }
+        return;
+    }
+    if ([tool isEqualToString:@"角度"]) {
+        CGContextMoveToPoint(ctx, first.x, first.y); if (_activePoints.count > 1) CGContextAddLineToPoint(ctx, _activePoints[1].CGPointValue.x, _activePoints[1].CGPointValue.y); if (_activePoints.count > 2) { CGContextMoveToPoint(ctx, _activePoints[1].CGPointValue.x, _activePoints[1].CGPointValue.y); CGContextAddLineToPoint(ctx, last.x, last.y); } CGContextStrokePath(ctx); return;
+    }
+    if ([tool isEqualToString:@"軌道"]) { CGContextMoveToPoint(ctx, first.x, first.y); for (NSValue *v in _activePoints) CGContextAddLineToPoint(ctx, v.CGPointValue.x, v.CGPointValue.y); CGContextStrokePath(ctx); return; }
+    if ([tool isEqualToString:@"フリー"]) { CGContextMoveToPoint(ctx, first.x, first.y); for (NSValue *v in _activePoints) CGContextAddLineToPoint(ctx, v.CGPointValue.x, v.CGPointValue.y); CGContextStrokePath(ctx); return; }
+    if ([tool isEqualToString:@"丸"]) { CGFloat r=hypot(last.x-first.x,last.y-first.y); CGContextSetFillColorWithColor(ctx, [previewFill colorWithAlphaComponent:.2].CGColor); CGContextFillEllipseInRect(ctx, CGRectMake(first.x-r, first.y-r, r*2, r*2)); return; }
+    if ([tool isEqualToString:@"楕円"] || [tool isEqualToString:@"四角"] || [tool isEqualToString:@"三角"]) { CGRect rect=CGRectStandardize(CGRectMake(first.x,first.y,last.x-first.x,last.y-first.y)); CGContextSetFillColorWithColor(ctx,[previewFill colorWithAlphaComponent:.2].CGColor); if ([tool isEqualToString:@"楕円"]) CGContextFillEllipseInRect(ctx,rect); else if ([tool isEqualToString:@"三角"]) { CGContextBeginPath(ctx); CGContextMoveToPoint(ctx,CGRectGetMidX(rect),CGRectGetMinY(rect)); CGContextAddLineToPoint(ctx,CGRectGetMaxX(rect),CGRectGetMaxY(rect)); CGContextAddLineToPoint(ctx,CGRectGetMinX(rect),CGRectGetMaxY(rect)); CGContextClosePath(ctx); CGContextFillPath(ctx); } else CGContextFillRect(ctx,rect); return; }
+    if ([tool isEqualToString:@"x"]) { CGContextMoveToPoint(ctx,first.x-12,first.y-12); CGContextAddLineToPoint(ctx,first.x+12,first.y+12); CGContextMoveToPoint(ctx,first.x+12,first.y-12); CGContextAddLineToPoint(ctx,first.x-12,first.y+12); CGContextStrokePath(ctx); }
+    else { CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, last.x, last.y); CGContextStrokePath(ctx); }
+    if ([tool isEqualToString:@"矢印"]) { CGFloat a=atan2(last.y-first.y,last.x-first.x),s=12; CGContextMoveToPoint(ctx,first.x,first.y); CGContextAddLineToPoint(ctx,first.x+s*cos(a-M_PI/6),first.y+s*sin(a-M_PI/6)); CGContextMoveToPoint(ctx,first.x,first.y); CGContextAddLineToPoint(ctx,first.x+s*cos(a+M_PI/6),first.y+s*sin(a+M_PI/6)); CGContextStrokePath(ctx); }
+}
+- (void)drawRect:(CGRect)rect { CGContextRef ctx = UIGraphicsGetCurrentContext(); for (NSDictionary *item in self.annotations) if ([self visible:item]) [self drawAnnotation:item inContext:ctx]; [self drawPreviewInContext:ctx]; }
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (!self.drawingEnabled) return; CGPoint p=[[touches anyObject] locationInView:self]; if ([self.tool isEqualToString:@"角度"]) { // ドラッグ方式と、点を順番にタップする方式の両方を受け付ける。
+        if (_activePoints.count < 3) [_activePoints addObject:[NSValue valueWithCGPoint:p]];
+    } else if ([self.tool isEqualToString:@"軌道"]) {
+        [_activePoints addObject:[NSValue valueWithCGPoint:p]];
+    } else {
+        [_activePoints removeAllObjects]; [_activePoints addObject:[NSValue valueWithCGPoint:p]];
+    } [self setNeedsDisplay]; }
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (!self.drawingEnabled || _activePoints.count==0) return; CGPoint p=[[touches anyObject] locationInView:self]; if ([self.tool isEqualToString:@"軌道"] || [self.tool isEqualToString:@"フリー"]) { [_activePoints addObject:[NSValue valueWithCGPoint:p]]; } else { if (_activePoints.count==1) [_activePoints addObject:[NSValue valueWithCGPoint:p]]; else _activePoints[_activePoints.count-1]=[NSValue valueWithCGPoint:p]; } [self setNeedsDisplay]; }
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (!self.drawingEnabled || _activePoints.count==0) return; if ([self.tool isEqualToString:@"角度"] && _activePoints.count < 3) { [self setNeedsDisplay]; return; } if (self.commitBlock) self.commitBlock([_activePoints copy]); if (![self.tool isEqualToString:@"軌道"]) [_activePoints removeAllObjects]; [self setNeedsDisplay]; }
+@end
+
+@interface WaterJumpReceivedPlayerViewController () <UIColorPickerViewControllerDelegate>
 @property (nonatomic, assign) float wjSelectedSpeed;
 @property (nonatomic, strong) UIView *speedControlContainer;
 @property (nonatomic, weak) UIView *speedControlHost;
@@ -36,6 +197,7 @@
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIButton *closeButton;
 @property (nonatomic, strong) UIButton *shareButton;
+@property (nonatomic, strong) UIButton *exportButton;
 @property (nonatomic, strong) UIButton *favoriteButton;
 @property (nonatomic, strong) UIImageView *favoriteIndicator;
 @property (nonatomic, strong) UIButton *playButton;
@@ -52,6 +214,25 @@
 @property (nonatomic, strong) UIPanGestureRecognizer *playlistPanGesture;
 @property (nonatomic, strong) UIPanGestureRecognizer *playlistOverlayPanGesture;
 @property (nonatomic, assign) BOOL switchingPlaylist;
+@property (nonatomic, strong) UIButton *drawingButton;
+@property (nonatomic, strong) WJDrawingCanvas *drawingCanvas;
+@property (nonatomic, strong) UIView *drawingPalette;
+@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *drawingAnnotations;
+@property (nonatomic, assign) BOOL drawingMode;
+@property (nonatomic, assign) CMTime drawingModeStartTime;
+@property (nonatomic, copy) NSString *drawingTool;
+@property (nonatomic, copy) NSString *drawingCategory;
+@property (nonatomic, copy) NSString *drawingLineStyle;
+@property (nonatomic, strong) UIColor *drawingForegroundColor;
+@property (nonatomic, strong) UIColor *drawingBackgroundColor;
+@property (nonatomic, copy) NSString *drawingText;
+@property (nonatomic, strong) NSMutableArray<NSString *> *customDrawingTexts;
+@property (nonatomic, assign) NSInteger drawingModeInitialAnnotationCount;
+@property (nonatomic, strong) UIButton *rotationHandle;
+@property (nonatomic, strong) UIButton *resizeHandle;
+@property (nonatomic, strong) NSMutableDictionary *activeDrawingAnnotation;
+@property (nonatomic, strong) UIColorPickerViewController *drawingColorPicker;
+@property (nonatomic, assign) BOOL drawingColorPickerForBackground;
 @end
 
 @implementation WaterJumpReceivedPlayerViewController
@@ -133,6 +314,8 @@
     [super viewDidLayoutSubviews];
     // contentOverlayViewがsafe areaだけのサイズになる環境でも、Player全体を覆う。
     self.contentOverlayView.frame = self.view.bounds;
+    if (self.drawingCanvas && self.speedControlHost) self.drawingCanvas.frame = self.speedControlHost.bounds;
+    [self updateRotationHandlePosition];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -144,6 +327,7 @@
         self.playbackTimeObserver = [self.player addPeriodicTimeObserverForInterval:CMTimeMake(1, 30) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
             [weakSelf updatePositionSlider];
             [weakSelf updateAnalysisForTime:time];
+            [weakSelf updateDrawingCanvasForTime:time];
             if (weakSelf.loopEnabled && CMTIME_IS_VALID(weakSelf.loopStartTime) && CMTIME_IS_VALID(weakSelf.loopEndTime) && CMTimeCompare(weakSelf.loopEndTime, weakSelf.loopStartTime) > 0) {
                 if (CMTimeCompare(time, weakSelf.loopEndTime) >= 0) {
                     AVPlayer *player = weakSelf.player; weakSelf.loopEnabled = NO;
@@ -158,6 +342,7 @@
         }];
     }
     [self resetAndPlay];
+    [self loadDrawingAnnotations];
     [self loadAnalysisForCurrentVideo];
     [self refreshFavoriteState];
 }
@@ -399,6 +584,7 @@
     self.playButton = [self featureButtonWithSymbol:@"pause.fill" action:@selector(togglePlay:) label:@"再生・一時停止"];
     self.playButton.hidden = YES;
     self.shareButton = [self featureButtonWithSymbol:@"square.and.arrow.up" action:@selector(shareCurrentVideo:) label:@"動画を共有"];
+    self.exportButton = [self featureButtonWithSymbol:@"square.and.arrow.down" action:@selector(exportDrawingVideo:) label:@"描画付き動画を書き出す"];
     self.favoriteButton = [self featureButtonWithSymbol:@"heart" action:@selector(toggleFavorite:) label:@"お気に入り"];
     self.favoriteButton.hidden = YES;
     self.closeButton = [self featureButtonWithSymbol:@"xmark" action:@selector(closePlayer:) label:@"閉じる"];
@@ -412,6 +598,46 @@
         [self.closeButton.widthAnchor constraintEqualToConstant:38],
         [self.closeButton.heightAnchor constraintEqualToConstant:36]
     ]];
+    self.drawingButton = [self featureButtonWithSymbol:@"pencil" action:@selector(toggleDrawingMode:) label:@"描画モード"]; 
+    self.drawingButton.tintColor = UIColor.systemYellowColor;
+    self.drawingButton.hidden = YES;
+    self.drawingButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [host addSubview:self.drawingButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawingButton.leadingAnchor constraintEqualToAnchor:self.closeButton.trailingAnchor constant:76],
+        [self.drawingButton.topAnchor constraintEqualToAnchor:self.closeButton.topAnchor],
+        [self.drawingButton.widthAnchor constraintEqualToConstant:38], [self.drawingButton.heightAnchor constraintEqualToConstant:36]
+    ]];
+    self.drawingCanvas = [[WJDrawingCanvas alloc] initWithFrame:host.bounds];
+    self.drawingCanvas.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.drawingCanvas.hidden = YES;
+    [host addSubview:self.drawingCanvas];
+    self.rotationHandle = [self featureButtonWithSymbol:@"arrow.triangle.2.circlepath" action:@selector(rotationHandleTapped:) label:@"図形を回転"];
+    self.rotationHandle.hidden = YES;
+    self.rotationHandle.translatesAutoresizingMaskIntoConstraints = YES;
+    [host addSubview:self.rotationHandle];
+    UIPanGestureRecognizer *rotationPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(rotateDrawing:)];
+    [self.rotationHandle addGestureRecognizer:rotationPan];
+    self.resizeHandle = [self featureButtonWithSymbol:@"arrow.up.left.and.arrow.down.right" action:@selector(resizeHandleTapped:) label:@"図形の大きさを変更"];
+    self.resizeHandle.hidden = YES;
+    self.resizeHandle.translatesAutoresizingMaskIntoConstraints = YES;
+    [host addSubview:self.resizeHandle];
+    UIPanGestureRecognizer *resizePan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeDrawing:)];
+    [self.resizeHandle addGestureRecognizer:resizePan];
+    self.drawingAnnotations = [NSMutableArray array];
+    self.drawingTool = @"直線";
+    self.drawingCategory = @"汎用";
+    self.drawingLineStyle = @"実線";
+    NSArray *savedDrawingTexts = [[NSUserDefaults standardUserDefaults] arrayForKey:@"WJCustomDrawingTexts"];
+    self.customDrawingTexts = savedDrawingTexts ? [savedDrawingTexts mutableCopy] : [NSMutableArray array];
+    self.drawingForegroundColor = UIColor.yellowColor;
+    self.drawingBackgroundColor = UIColor.clearColor;
+    self.drawingCanvas.foregroundColor = self.drawingForegroundColor;
+    self.drawingCanvas.backgroundColorForDrawing = self.drawingBackgroundColor;
+    __weak typeof(self) weakSelf = self;
+    self.drawingCanvas.commitBlock = ^(NSArray<NSValue *> *points) { [weakSelf commitDrawingPoints:points]; };
+    self.drawingCanvas.tapBlock = ^(CGPoint point) { [weakSelf drawingTextTappedAtPoint:point]; };
+    [self buildDrawingPaletteInHost:host];
     // iPhoneの横幅でも操作できるよう、再生・コマ送り・お気に入り・削除は
     // 横一列のグループから外して固定位置に置く。
     self.frameStepButton.hidden = YES;
@@ -442,6 +668,13 @@
         [self.shareButton.centerYAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerYAnchor],
         [self.shareButton.widthAnchor constraintEqualToConstant:38], [self.shareButton.heightAnchor constraintEqualToConstant:36]
     ]];
+    self.exportButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [host addSubview:self.exportButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.exportButton.trailingAnchor constraintEqualToAnchor:self.shareButton.leadingAnchor constant:-6],
+        [self.exportButton.centerYAnchor constraintEqualToAnchor:self.shareButton.centerYAnchor],
+        [self.exportButton.widthAnchor constraintEqualToConstant:38], [self.exportButton.heightAnchor constraintEqualToConstant:36]
+    ]];
     // A点からTakeoffまでを画面幅の80%に広げ、均等間隔で配置する。
     UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.mirrorButton, self.skeletonButton, self.takeoffButton]];
     featureStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -462,6 +695,380 @@
         [featureStack.bottomAnchor constraintEqualToAnchor:self.featureControlContainer.bottomAnchor constant:-4]
     ]];
 }
+
+- (void)buildDrawingPaletteInHost:(UIView *)host {
+    self.drawingPalette = [[UIView alloc] initWithFrame:CGRectMake(8, 120, 112, 348)];
+    self.drawingPalette.backgroundColor = [UIColor colorWithWhite:0 alpha:.72];
+    self.drawingPalette.layer.cornerRadius = 10;
+    self.drawingPalette.hidden = YES;
+    [host addSubview:self.drawingPalette];
+    NSArray *titles = @[@"カテゴリ", @"描画種別", @"色", @"文字", @"線種"];
+    NSArray *actions = @[@"drawingCategoryMenu:", @"drawingToolMenu:", @"drawingForegroundMenu:", @"drawingTextMenu:", @"drawingLineStyleMenu:"];
+    for (NSInteger i = 0; i < titles.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+        button.frame = CGRectMake(6, 8 + i * 46, 100, 38);
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+        button.titleLabel.numberOfLines = 2;
+        button.titleLabel.textAlignment = NSTextAlignmentCenter;
+        button.titleLabel.lineBreakMode = NSLineBreakByWordWrapping;
+        button.titleLabel.adjustsFontSizeToFitWidth = NO;
+        button.contentEdgeInsets = UIEdgeInsetsMake(2, 2, 2, 2);
+        [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        button.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
+        button.layer.cornerRadius = 6;
+        button.tag = i + 1;
+        [button addTarget:self action:NSSelectorFromString(actions[i]) forControlEvents:UIControlEventTouchUpInside];
+        [self.drawingPalette addSubview:button];
+    }
+    UIButton *undo = [UIButton buttonWithType:UIButtonTypeSystem];
+    undo.frame = CGRectMake(6, 8 + titles.count * 46, 100, 38);
+    undo.accessibilityLabel = @"直前の描画を取り消す";
+    [undo setImage:[UIImage systemImageNamed:@"arrow.uturn.backward"] forState:UIControlStateNormal];
+    [undo setTitle:@"  Undo" forState:UIControlStateNormal];
+    undo.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    [undo setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    undo.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
+    undo.layer.cornerRadius = 6;
+    [undo addTarget:self action:@selector(undoDrawing:) forControlEvents:UIControlEventTouchUpInside];
+    [self.drawingPalette addSubview:undo];
+    UIButton *clear = [UIButton buttonWithType:UIButtonTypeSystem];
+    clear.frame = CGRectMake(6, 8 + (titles.count + 1) * 46, 100, 38);
+    [clear setTitle:@"カテゴリを削除" forState:UIControlStateNormal];
+    clear.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    [clear setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
+    clear.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
+    clear.layer.cornerRadius = 6;
+    [clear addTarget:self action:@selector(clearDrawingCategory:) forControlEvents:UIControlEventTouchUpInside];
+    [self.drawingPalette addSubview:clear];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveDrawingPalette:)];
+    [self.drawingPalette addGestureRecognizer:pan];
+    [self refreshDrawingPaletteState];
+}
+- (void)clearDrawingCategory:(id)sender {
+    NSString *category = self.drawingCategory ?: @"汎用";
+    NSIndexSet *indexes = [self.drawingAnnotations indexesOfObjectsPassingTest:^BOOL(NSDictionary *obj, NSUInteger idx, BOOL *stop) { return [obj[@"category"] isEqualToString:category]; }];
+    [self.drawingAnnotations removeObjectsAtIndexes:indexes];
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self saveDrawingAnnotations];
+}
+- (void)undoDrawing:(id)sender {
+    if (!self.drawingMode || self.drawingAnnotations.count <= self.drawingModeInitialAnnotationCount) return;
+    [self.drawingAnnotations removeLastObject];
+    self.activeDrawingAnnotation = nil;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self updateRotationHandlePosition];
+    [self saveDrawingAnnotations];
+}
+- (void)refreshDrawingPaletteState {
+    // パレットで選択した描画種別を実際の入力キャンバスへ同期する。
+    self.drawingCanvas.tool = self.drawingTool ?: @"直線";
+    self.drawingCanvas.drawingText = self.drawingText ?: @"";
+    self.drawingCanvas.foregroundColor = self.drawingForegroundColor ?: UIColor.yellowColor;
+    self.drawingCanvas.backgroundColorForDrawing = self.drawingBackgroundColor ?: UIColor.clearColor;
+    BOOL shape = [self.drawingTool isEqualToString:@"楕円"] || [self.drawingTool isEqualToString:@"四角"] || [self.drawingTool isEqualToString:@"三角"];
+    BOOL text = [self.drawingTool isEqualToString:@"文字"];
+    BOOL lineOnlyCategory = [self.drawingCategory isEqualToString:@"基準"] || [self.drawingCategory isEqualToString:@"対象"];
+    NSArray *titles = @[@"カテゴリ", @"描画種別", @"色", @"文字", @"線種"];
+    NSArray *values = @[self.drawingCategory ?: @"汎用", self.drawingTool ?: @"直線", [self colorNameForColor:self.drawingForegroundColor], self.drawingText.length ? self.drawingText : @"未選択", self.drawingLineStyle ?: @"実線"];
+    for (UIView *view in self.drawingPalette.subviews) if ([view isKindOfClass:UIButton.class]) {
+        UIButton *button = (UIButton *)view;
+        if (button.tag >= 1 && button.tag <= 5) {
+            NSInteger index = button.tag - 1;
+            NSString *title = titles[index], *value = values[index];
+            NSString *summary = [NSString stringWithFormat:@"%@\n%@", title, value];
+            NSMutableAttributedString *attributed = [[NSMutableAttributedString alloc] initWithString:summary attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:11 weight:UIFontWeightSemibold], NSForegroundColorAttributeName:UIColor.whiteColor}];
+            [attributed addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:8 weight:UIFontWeightRegular] range:NSMakeRange(title.length + 1, value.length)];
+            if (index == 2) {
+                UIColor *selectedColor = self.drawingForegroundColor ?: UIColor.yellowColor;
+                if (selectedColor == UIColor.clearColor || CGColorGetAlpha(selectedColor.CGColor) < 0.01) selectedColor = [UIColor colorWithWhite:1 alpha:.45];
+                [attributed addAttribute:NSForegroundColorAttributeName value:selectedColor range:NSMakeRange(title.length + 1, value.length)];
+            }
+            [button setAttributedTitle:attributed forState:UIControlStateNormal];
+        }
+        if (button.tag == 2) { button.enabled = !lineOnlyCategory; button.alpha = lineOnlyCategory ? .35 : 1.0; }
+        if (button.tag == 4) { button.enabled = text; button.alpha = text ? 1.0 : .35; }
+    }
+}
+
+- (NSURL *)drawingMetadataURL {
+    NSURL *videoURL = [(AVURLAsset *)self.player.currentItem.asset URL];
+    return videoURL ? [videoURL URLByAppendingPathExtension:@"drawing.json"] : nil;
+}
+- (void)loadDrawingAnnotations {
+    [self.drawingAnnotations removeAllObjects];
+    self.activeDrawingAnnotation = nil;
+    self.rotationHandle.hidden = YES;
+    self.resizeHandle.hidden = YES;
+    NSURL *url = [self drawingMetadataURL];
+    NSData *data = url ? [NSData dataWithContentsOfURL:url] : nil;
+    NSArray *items = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if ([items isKindOfClass:NSArray.class]) for (NSDictionary *item in items) if ([item isKindOfClass:NSDictionary.class]) {
+        NSMutableDictionary *copy = [item mutableCopy];
+        NSString *category = copy[@"category"];
+        if ([copy[@"tool"] isEqualToString:@"線"]) copy[@"tool"] = @"直線";
+        if ([category isEqualToString:@"踏切"]) copy[@"category"] = @"基準";
+        else if ([category isEqualToString:@"人"]) copy[@"category"] = @"対象";
+        else if ([category isEqualToString:@"その他"] || !category.length) copy[@"category"] = @"汎用";
+        [self.drawingAnnotations addObject:copy];
+    }
+    self.drawingCanvas.hidden = self.drawingAnnotations.count == 0;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    self.drawingCanvas.currentTime = self.player.currentTime;
+}
+- (void)saveDrawingAnnotations {
+    NSURL *url = [self drawingMetadataURL];
+    if (!url) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:self.drawingAnnotations options:NSJSONWritingPrettyPrinted error:nil];
+    if (data) [data writeToURL:url options:NSDataWritingAtomic error:nil];
+}
+- (void)updateDrawingCanvasForTime:(CMTime)time {
+    if (!self.drawingCanvas) return;
+    self.drawingCanvas.currentTime = time;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+}
+- (void)toggleDrawingMode:(id)sender {
+    if (self.player.rate > 0) return;
+    self.drawingMode = !self.drawingMode;
+    if (self.drawingMode) {
+        self.drawingModeInitialAnnotationCount = self.drawingAnnotations.count;
+        self.drawingModeStartTime = self.player.currentTime;
+        self.playlistPanGesture.enabled = NO;
+        self.playlistOverlayPanGesture.enabled = NO;
+        self.drawingCanvas.frame = self.speedControlHost.bounds;
+        self.drawingCanvas.userInteractionEnabled = YES;
+        [self.speedControlHost bringSubviewToFront:self.drawingCanvas];
+        [self.speedControlHost bringSubviewToFront:self.drawingPalette];
+        [self.speedControlHost bringSubviewToFront:self.drawingButton];
+        [self.speedControlHost bringSubviewToFront:self.rotationHandle];
+        [self.speedControlHost bringSubviewToFront:self.resizeHandle];
+        self.drawingCanvas.drawingEnabled = YES;
+        self.drawingCanvas.hidden = NO;
+        self.drawingPalette.hidden = NO;
+        [self.drawingButton setImage:[UIImage systemImageNamed:@"pencil.circle.fill"] forState:UIControlStateNormal];
+        [self.speedHideTimer invalidate];
+    } else {
+        double end = CMTimeGetSeconds(self.player.currentTime);
+        for (NSMutableDictionary *item in self.drawingAnnotations) if (item[@"end"] == [NSNull null]) item[@"end"] = @(end);
+        [self saveDrawingAnnotations];
+        self.drawingCanvas.drawingEnabled = NO;
+        self.drawingCanvas.userInteractionEnabled = NO;
+        self.drawingPalette.hidden = YES;
+        self.playlistPanGesture.enabled = YES;
+        self.playlistOverlayPanGesture.enabled = YES;
+        [self.drawingButton setImage:[UIImage systemImageNamed:@"pencil"] forState:UIControlStateNormal];
+        [self showSpeedControls];
+    }
+    self.drawingCanvas.currentTime = self.player.currentTime;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+}
+- (void)moveDrawingPalette:(UIPanGestureRecognizer *)gesture {
+    CGPoint translation = [gesture translationInView:self.drawingPalette.superview];
+    CGPoint center = self.drawingPalette.center;
+    center.x += translation.x; center.y += translation.y;
+    CGFloat half = self.drawingPalette.bounds.size.width / 2.0;
+    center.x = MAX(half + 4, MIN(self.drawingPalette.superview.bounds.size.width - half - 4, center.x));
+    center.y = MAX(self.drawingPalette.bounds.size.height / 2 + 8, MIN(self.drawingPalette.superview.bounds.size.height - self.drawingPalette.bounds.size.height / 2 - 8, center.y));
+    self.drawingPalette.center = center;
+    [gesture setTranslation:CGPointZero inView:self.drawingPalette.superview];
+}
+- (NSDictionary *)colorComponents:(UIColor *)color background:(BOOL)background {
+    CGFloat r=0,g=0,b=0,a=1; [color getRed:&r green:&g blue:&b alpha:&a];
+    return background ? @{ @"br": @(r), @"bg": @(g), @"bb": @(b), @"ba": @(a) } : @{ @"r": @(r), @"g": @(g), @"b": @(b), @"a": @(a) };
+}
+- (void)commitDrawingPoints:(NSArray<NSValue *> *)points {
+    if (!self.drawingMode || points.count == 0) return;
+    NSString *tool = self.drawingTool ?: @"直線";
+    if ([self.drawingCategory isEqualToString:@"基準"]) {
+        tool = @"直線";
+        NSIndexSet *old = [self.drawingAnnotations indexesOfObjectsPassingTest:^BOOL(NSDictionary *obj, NSUInteger idx, BOOL *stop) { return [obj[@"category"] isEqualToString:@"基準"]; }];
+        [self.drawingAnnotations removeObjectsAtIndexes:old];
+    }
+    NSMutableArray *normalized = [NSMutableArray array];
+    for (NSValue *value in points) {
+        CGPoint p = value.CGPointValue;
+        [normalized addObject:@[@(MAX(0, MIN(1, p.x / MAX(self.drawingCanvas.bounds.size.width, 1)))), @(MAX(0, MIN(1, p.y / MAX(self.drawingCanvas.bounds.size.height, 1))))]];
+    }
+    if ([tool isEqualToString:@"軌道"]) {
+        NSIndexSet *oldTrajectory = [self.drawingAnnotations indexesOfObjectsPassingTest:^BOOL(NSDictionary *obj, NSUInteger idx, BOOL *stop) {
+            return [obj[@"tool"] isEqualToString:@"軌道"] && [obj[@"start"] doubleValue] == CMTimeGetSeconds(self.drawingModeStartTime);
+        }];
+        [self.drawingAnnotations removeObjectsAtIndexes:oldTrajectory];
+    }
+    double startTime = CMTimeGetSeconds(self.drawingModeStartTime); if (!isfinite(startTime)) startTime = 0;
+    NSMutableDictionary *item = [@{ @"tool": tool, @"category": self.drawingCategory ?: @"汎用", @"style": self.drawingLineStyle ?: @"実線", @"points": normalized, @"start": @(startTime), @"end": [NSNull null], @"width": @3.0, @"text": self.drawingText ?: @"" } mutableCopy];
+    [item addEntriesFromDictionary:[self colorComponents:self.drawingForegroundColor background:NO]];
+    [item addEntriesFromDictionary:[self colorComponents:self.drawingBackgroundColor background:YES]];
+    if ([self.drawingCategory isEqualToString:@"基準"] && normalized.count >= 2) {
+        NSArray *p0=normalized.firstObject, *p1=normalized.lastObject;
+        CGFloat dx=fabs([p1[0] doubleValue]-[p0[0] doubleValue]);
+        CGFloat dy=fabs([p1[1] doubleValue]-[p0[1] doubleValue]);
+        CGFloat diagonalAngle = atan2(dy, dx) * 180.0 / M_PI;
+        // 対角線で分割された矩形の「下側」の三角形について、終了点の直角ではない内角を求める。
+        // 矩形の底辺方向と対角線の内角。開始点・終了点の上下関係では切り替えない。
+        CGFloat angle = diagonalAngle;
+        angle = MAX(0.0, MIN(180.0, angle));
+        item[@"angle"] = @(angle);
+    }
+    [self.drawingAnnotations addObject:item];
+    [self updatePersonAnglesForCurrentRamp];
+    if ([tool isEqualToString:@"楕円"] || [tool isEqualToString:@"四角"] || [tool isEqualToString:@"三角"]) self.activeDrawingAnnotation = item;
+    self.drawingCanvas.hidden = NO;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self updateRotationHandlePosition];
+    [self saveDrawingAnnotations];
+}
+- (void)updatePersonAnglesForCurrentRamp {
+    NSDictionary *ramp = nil;
+    for (NSDictionary *item in self.drawingAnnotations) if ([item[@"category"] isEqualToString:@"基準"]) { ramp = item; break; }
+    if (!ramp) return;
+    NSArray *rampPoints = ramp[@"points"]; if (rampPoints.count < 2) return;
+    NSArray *r0 = rampPoints.firstObject, *r1 = rampPoints.lastObject;
+    CGFloat rx = [r1[0] doubleValue] - [r0[0] doubleValue], ry = [r1[1] doubleValue] - [r0[1] doubleValue];
+    CGFloat rampLength = hypot(rx, ry);
+    for (NSMutableDictionary *item in self.drawingAnnotations) if ([item[@"category"] isEqualToString:@"対象"] && [item[@"tool"] isEqualToString:@"直線"]) {
+        NSArray *points = item[@"points"]; if (points.count < 2) continue;
+        NSArray *p0 = points.firstObject, *p1 = points.lastObject;
+        CGFloat tx = [p1[0] doubleValue]-[p0[0] doubleValue], ty = [p1[1] doubleValue]-[p0[1] doubleValue];
+        CGFloat targetLength = hypot(tx, ty);
+        if (rampLength > 0.0001 && targetLength > 0.0001) {
+            CGFloat cosine = fabs((rx * tx + ry * ty) / (rampLength * targetLength));
+            cosine = MAX(0.0, MIN(1.0, cosine));
+            item[@"angle"] = @(acos(cosine) * 180.0 / M_PI);
+        }
+    }
+}
+- (void)updateRotationHandlePosition {
+    if (!self.activeDrawingAnnotation || !self.rotationHandle || self.drawingCanvas.hidden) { self.rotationHandle.hidden = YES; self.resizeHandle.hidden = YES; return; }
+    NSArray *points = self.activeDrawingAnnotation[@"points"]; if (points.count < 2) { self.rotationHandle.hidden = YES; return; }
+    NSArray *last = points.lastObject;
+    CGFloat x = [last[0] doubleValue] * self.drawingCanvas.bounds.size.width;
+    CGFloat y = [last[1] doubleValue] * self.drawingCanvas.bounds.size.height;
+    self.rotationHandle.frame = CGRectMake(x - 18, y - 18, 36, 36);
+    self.resizeHandle.frame = CGRectMake(x + 20, y - 18, 36, 36);
+    self.rotationHandle.hidden = NO;
+    self.resizeHandle.hidden = NO;
+}
+- (void)rotationHandleTapped:(id)sender { }
+- (void)rotateDrawing:(UIPanGestureRecognizer *)gesture {
+    if (!self.activeDrawingAnnotation) return;
+    CGPoint point = [gesture locationInView:self.drawingCanvas];
+    NSArray *points = self.activeDrawingAnnotation[@"points"]; if (points.count < 2) return;
+    NSArray *first = points.firstObject, *last = points.lastObject;
+    CGPoint center = CGPointMake(([first[0] doubleValue]+[last[0] doubleValue]) * .5 * self.drawingCanvas.bounds.size.width, ([first[1] doubleValue]+[last[1] doubleValue]) * .5 * self.drawingCanvas.bounds.size.height);
+    CGFloat angle = atan2(point.y-center.y, point.x-center.x);
+    self.activeDrawingAnnotation[@"rotation"] = @(angle);
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self saveDrawingAnnotations];
+}
+- (void)resizeHandleTapped:(id)sender { }
+- (void)resizeDrawing:(UIPanGestureRecognizer *)gesture {
+    if (!self.activeDrawingAnnotation) return;
+    CGPoint point = [gesture locationInView:self.drawingCanvas];
+    NSArray *points = self.activeDrawingAnnotation[@"points"]; if (points.count < 2) return;
+    NSMutableArray *updated = [NSMutableArray arrayWithArray:points];
+    updated[updated.count - 1] = @[@(MAX(0, MIN(1, point.x / MAX(self.drawingCanvas.bounds.size.width, 1)))), @(MAX(0, MIN(1, point.y / MAX(self.drawingCanvas.bounds.size.height, 1))))];
+    self.activeDrawingAnnotation[@"points"] = updated;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self updateRotationHandlePosition];
+    [self saveDrawingAnnotations];
+}
+- (void)drawingTextTappedAtPoint:(CGPoint)point {
+    if (!self.drawingMode || !self.drawingText.length) return;
+    [self commitDrawingPoints:@[[NSValue valueWithCGPoint:point]]];
+}
+- (void)showDrawingMenu:(NSArray<NSString *> *)items title:(NSString *)title handler:(void (^)(NSString *value))handler {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSString *item in items) [alert addAction:[UIAlertAction actionWithTitle:item style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ handler(item); }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    if (alert.popoverPresentationController) { alert.popoverPresentationController.sourceView = self.drawingPalette; alert.popoverPresentationController.sourceRect = self.drawingPalette.bounds; }
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)showDrawingOptions:(NSArray<NSDictionary *> *)options title:(NSString *)title handler:(void (^)(NSString *value))handler {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary *option in options) {
+        UIAlertAction *action = [UIAlertAction actionWithTitle:option[@"display"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ handler(option[@"value"]); }];
+        [alert addAction:action];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    if (alert.popoverPresentationController) { alert.popoverPresentationController.sourceView = self.drawingPalette; alert.popoverPresentationController.sourceRect = self.drawingPalette.bounds; }
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (NSDictionary *)drawingOption:(NSString *)value display:(NSString *)display selected:(NSString *)selected {
+    return @{@"value": value, @"display": [NSString stringWithFormat:@"%@%@", [value isEqualToString:selected] ? @"✓ " : @"", display]};
+}
+- (NSDictionary *)drawingOption:(NSString *)value display:(NSString *)display selected:(NSString *)selected image:(UIImage *)image {
+    NSMutableDictionary *option = [[self drawingOption:value display:display selected:selected] mutableCopy]; if (image) option[@"image"] = image; return option;
+}
+- (UIImage *)drawingToolIcon:(NSString *)tool color:(UIColor *)color {
+    CGSize size = CGSizeMake(34, 22); UIGraphicsBeginImageContextWithOptions(size, NO, 0); CGContextRef ctx = UIGraphicsGetCurrentContext(); CGContextSetStrokeColorWithColor(ctx, (color ?: UIColor.whiteColor).CGColor); CGContextSetFillColorWithColor(ctx, (color ?: UIColor.whiteColor).CGColor); CGContextSetLineWidth(ctx, 4);
+    if ([tool isEqualToString:@"直線"]) { CGContextMoveToPoint(ctx, 3, 11); CGContextAddLineToPoint(ctx, 31, 11); CGContextStrokePath(ctx); }
+    else if ([tool isEqualToString:@"矢印"]) { CGContextMoveToPoint(ctx, 3, 11); CGContextAddLineToPoint(ctx, 27, 11); CGContextStrokePath(ctx); CGContextMoveToPoint(ctx, 27, 11); CGContextAddLineToPoint(ctx, 20, 5); CGContextMoveToPoint(ctx, 27, 11); CGContextAddLineToPoint(ctx, 20, 17); CGContextStrokePath(ctx); }
+    else if ([tool isEqualToString:@"丸"]) CGContextFillEllipseInRect(ctx, CGRectMake(7, 1, 20, 20));
+    else if ([tool isEqualToString:@"楕円"]) CGContextFillEllipseInRect(ctx, CGRectMake(2, 4, 30, 14));
+    else if ([tool isEqualToString:@"四角"]) CGContextFillRect(ctx, CGRectMake(5, 3, 24, 16));
+    else if ([tool isEqualToString:@"三角"]) { CGContextMoveToPoint(ctx, 17, 2); CGContextAddLineToPoint(ctx, 31, 20); CGContextAddLineToPoint(ctx, 3, 20); CGContextClosePath(ctx); CGContextFillPath(ctx); }
+    else if ([tool isEqualToString:@"x"]) { CGContextMoveToPoint(ctx, 7, 4); CGContextAddLineToPoint(ctx, 27, 18); CGContextMoveToPoint(ctx, 27, 4); CGContextAddLineToPoint(ctx, 7, 18); CGContextStrokePath(ctx); }
+    else if ([tool isEqualToString:@"角度"]) { CGContextMoveToPoint(ctx, 4, 18); CGContextAddLineToPoint(ctx, 16, 5); CGContextAddLineToPoint(ctx, 30, 18); CGContextStrokePath(ctx); }
+    else if ([tool isEqualToString:@"軌道"] || [tool isEqualToString:@"フリー"]) { CGContextMoveToPoint(ctx, 3, 16); CGContextAddCurveToPoint(ctx, 10, 2, 20, 20, 31, 6); CGContextStrokePath(ctx); }
+    else { CGContextFillRect(ctx, CGRectMake(13, 2, 8, 18)); }
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext(); UIGraphicsEndImageContext(); return image;
+}
+- (NSString *)drawingToolGlyph:(NSString *)tool {
+    NSDictionary *glyphs=@{@"文字":@"T", @"直線":@"━━━━", @"矢印":@"━━▶", @"丸":@"●", @"楕円":@"⬭", @"四角":@"■", @"三角":@"▲", @"x":@"✕", @"角度":@"∠", @"軌道":@"〰", @"フリー":@"〰"};
+    return glyphs[tool] ?: @"";
+}
+- (UIImage *)drawingColorIcon:(UIColor *)color { CGSize size=CGSizeMake(24,24); UIGraphicsBeginImageContextWithOptions(size,NO,0); CGContextRef ctx=UIGraphicsGetCurrentContext(); CGContextSetFillColorWithColor(ctx,color.CGColor); CGContextFillEllipseInRect(ctx,CGRectMake(3,3,18,18)); UIImage *image=UIGraphicsGetImageFromCurrentImageContext(); UIGraphicsEndImageContext(); return image; }
+- (UIImage *)drawingLineStyleIcon:(NSString *)style { CGSize size=CGSizeMake(48,22); UIGraphicsBeginImageContextWithOptions(size,NO,0); CGContextRef ctx=UIGraphicsGetCurrentContext(); CGContextSetStrokeColorWithColor(ctx,UIColor.whiteColor.CGColor); CGContextSetLineWidth(ctx,5); if ([style isEqualToString:@"点線"]) { CGFloat p[]={4,4}; CGContextSetLineDash(ctx,0,p,2); } else if ([style isEqualToString:@"鎖線"]) { CGFloat p[]={12,8}; CGContextSetLineDash(ctx,0,p,2); } CGContextMoveToPoint(ctx,2,11); CGContextAddLineToPoint(ctx,46,11); CGContextStrokePath(ctx); UIImage *image=UIGraphicsGetImageFromCurrentImageContext(); UIGraphicsEndImageContext(); return image; }
+- (void)drawingToolMenu:(id)sender { NSArray *values=@[@"文字",@"直線",@"矢印",@"丸",@"楕円",@"四角",@"三角",@"x",@"角度",@"軌道",@"フリー"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) { NSString *display=[NSString stringWithFormat:@"%@    %@", v, [self drawingToolGlyph:v]]; [options addObject:[self drawingOption:v display:display selected:self.drawingTool]]; } [self showDrawingOptions:options title:@"描画種別" handler:^(NSString *v){ self.drawingTool=v; [self refreshDrawingPaletteState]; }]; }
+- (void)drawingCategoryMenu:(id)sender { NSArray *values=@[@"汎用",@"基準",@"対象"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) [options addObject:[self drawingOption:v display:v selected:self.drawingCategory]]; [self showDrawingOptions:options title:@"カテゴリ" handler:^(NSString *v){ self.drawingCategory=v; if ([v isEqualToString:@"基準"] || [v isEqualToString:@"対象"]) self.drawingTool=@"直線"; if ([v isEqualToString:@"基準"]) self.drawingLineStyle=@"点線"; [self refreshDrawingPaletteState]; }]; }
+- (void)drawingLineStyleMenu:(id)sender { NSArray *values=@[@"実線",@"点線",@"鎖線"]; NSArray *displays=@[@"━━━━━━",@"┄┄┄",@"┄┄┄┄┄┄"]; NSMutableArray *options=[NSMutableArray array]; for (NSInteger i=0;i<values.count;i++) [options addObject:[self drawingOption:values[i] display:displays[i] selected:self.drawingLineStyle]]; [self showDrawingOptions:options title:@"線種" handler:^(NSString *v){ self.drawingLineStyle=v; [self refreshDrawingPaletteState]; }]; }
+- (UIColor *)colorForName:(NSString *)name { NSDictionary *colors=@{@"黄":UIColor.yellowColor,@"緑":UIColor.greenColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; return colors[name] ?: UIColor.yellowColor; }
+- (NSString *)colorNameForColor:(UIColor *)color { if (!color) return @"なし"; CGFloat r=0,g=0,b=0,a=1; [color getRed:&r green:&g blue:&b alpha:&a]; if (a <= 0.01) return @"なし"; NSDictionary *colors=@{@"黄":UIColor.yellowColor,@"緑":UIColor.greenColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; for (NSString *name in colors) if ([color isEqual:colors[name]]) return name; return @"その他"; }
+- (void)drawingColorMenu:(BOOL)background {
+    NSArray *values=@[@"黄",@"緑",@"オレンジ",@"ピンク",@"明るい紫",@"赤",@"青",@"白",@"その他"];
+    NSArray *icons=@[@"🟡",@"🟢",@"🟠",@"🔴",@"🟣",@"🟥",@"🔵",@"⚪",@"＋"];
+    NSArray *iconColors=@[UIColor.yellowColor, UIColor.greenColor, UIColor.orangeColor, [UIColor colorWithRed:1 green:.35 blue:.65 alpha:1], UIColor.systemPurpleColor, UIColor.redColor, UIColor.blueColor, UIColor.whiteColor, UIColor.lightGrayColor];
+    UIColor *selectedColor = background ? self.drawingBackgroundColor : self.drawingForegroundColor;
+    NSString *selected = [self colorNameForColor:selectedColor];
+    NSMutableArray *options=[NSMutableArray array]; for (NSInteger i=0;i<values.count;i++) [options addObject:[self drawingOption:values[i] display:icons[i] selected:selected image:[self drawingColorIcon:iconColors[i]]]];
+    [self showDrawingOptions:options title:@"色" handler:^(NSString *v){ if ([v isEqualToString:@"その他"]) { [self showColorPickerForBackground:background]; return; } if (background) self.drawingBackgroundColor=[self colorForName:v]; else self.drawingForegroundColor=[self colorForName:v]; [self refreshDrawingPaletteState]; }];
+}
+- (void)showColorPickerForBackground:(BOOL)background {
+    self.drawingColorPickerForBackground = background;
+    self.drawingColorPicker = [UIColorPickerViewController new];
+    self.drawingColorPicker.delegate = self;
+    self.drawingColorPicker.supportsAlpha = YES;
+    self.drawingColorPicker.selectedColor = background ? self.drawingBackgroundColor : self.drawingForegroundColor;
+    [self presentViewController:self.drawingColorPicker animated:YES completion:nil];
+}
+- (void)colorPickerViewControllerDidSelectColor:(UIColorPickerViewController *)viewController {
+    if (self.drawingColorPickerForBackground) self.drawingBackgroundColor = viewController.selectedColor;
+    else self.drawingForegroundColor = viewController.selectedColor;
+    [self refreshDrawingPaletteState];
+}
+- (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController *)viewController {
+    [self refreshDrawingPaletteState];
+}
+- (void)drawingForegroundMenu:(id)sender { [self drawingColorMenu:NO]; }
+- (void)drawingBackgroundMenu:(id)sender { if (!([self.drawingTool isEqualToString:@"楕円"] || [self.drawingTool isEqualToString:@"四角"] || [self.drawingTool isEqualToString:@"三角"])) return; [self drawingColorMenu:YES]; }
+- (void)drawingTextMenu:(id)sender {
+    if (![self.drawingTool isEqualToString:@"文字"]) return;
+    NSMutableArray *items=[NSMutableArray arrayWithArray:@[@"伸ばす",@"締める",@"強く",@"上に",@"前に",@"下に",@"後に",@"👍",@"👎",@"⌨"]];
+    for (NSString *custom in self.customDrawingTexts) if (![items containsObject:custom]) [items insertObject:custom atIndex:items.count-1];
+    NSMutableArray *options=[NSMutableArray array]; for (NSString *v in items) [options addObject:[self drawingOption:v display:v selected:self.drawingText]];
+    [self showDrawingOptions:options title:@"文字" handler:^(NSString *v){
+        if ([v isEqualToString:@"⌨"]) {
+            UIAlertController *a=[UIAlertController alertControllerWithTitle:@"文字入力" message:@"16文字以内で入力してください" preferredStyle:UIAlertControllerStyleAlert];
+            [a addTextFieldWithConfigurationHandler:^(UITextField *f){ f.placeholder=@"入力文字"; f.clearButtonMode=UITextFieldViewModeWhileEditing; }];
+            [a addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+            [a addAction:[UIAlertAction actionWithTitle:@"登録" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){ NSString *value=a.textFields.firstObject.text; if (value.length > 0 && value.length <= 16) { if (!self.customDrawingTexts) self.customDrawingTexts=[NSMutableArray array]; if (![self.customDrawingTexts containsObject:value]) [self.customDrawingTexts addObject:value]; [[NSUserDefaults standardUserDefaults] setObject:self.customDrawingTexts forKey:@"WJCustomDrawingTexts"]; [[NSUserDefaults standardUserDefaults] synchronize]; self.drawingText=value; } [self refreshDrawingPaletteState]; }]];
+            [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){ NSString *value=a.textFields.firstObject.text; if (value.length > 0 && value.length <= 16) self.drawingText=value; [self refreshDrawingPaletteState]; }]];
+            [self presentViewController:a animated:YES completion:nil];
+        } else { self.drawingText=v; [self refreshDrawingPaletteState]; }
+    }];
+}
+
 
 - (UIButton *)featureButtonWithSymbol:(NSString *)symbol action:(SEL)action label:(NSString *)label {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -489,6 +1096,10 @@
         self.automaticLoopDeadline = nil;
         self.skeletonVisible = NO;
         self.skeletonOverlayLayer.hidden = YES;
+        self.drawingMode = NO;
+        self.drawingCanvas.drawingEnabled = NO;
+        self.drawingPalette.hidden = YES;
+        self.drawingButton.hidden = YES;
         self.takeoffButton.enabled = NO;
         self.takeoffButton.alpha = .4;
         [self.player replaceCurrentItemWithPlayerItem:item];
@@ -498,6 +1109,7 @@
         [self applyMirrorToPlayerLayers];
         [self updateSpeedSlider];
         [self refreshFeatureButtons];
+        [self loadDrawingAnnotations];
         [self resetAndPlay];
         [self loadAnalysisForCurrentVideo];
         [self refreshFavoriteState];
@@ -596,15 +1208,19 @@
     self.frameStepButton.hidden = NO;
     self.favoriteButton.hidden = NO;
     self.deleteButton.hidden = NO;
+    self.drawingButton.hidden = self.player.rate > 0;
     [self.speedControlHost bringSubviewToFront:self.speedControlContainer];
     [self.speedControlHost bringSubviewToFront:self.playButton];
     [self.speedControlHost bringSubviewToFront:self.frameStepButton];
     [self.speedControlHost bringSubviewToFront:self.deleteButton];
     [self.speedControlHost bringSubviewToFront:self.shareButton];
+    [self.speedControlHost bringSubviewToFront:self.exportButton];
     [self.speedControlHost bringSubviewToFront:self.favoriteButton];
     [self.speedControlHost bringSubviewToFront:self.closeButton];
+    [self.speedControlHost bringSubviewToFront:self.drawingButton];
     [self.speedControlHost bringSubviewToFront:self.favoriteIndicator];
     [self.speedHideTimer invalidate];
+    if (self.drawingMode) return;
     // A点を設定した後は、B点を設定するまで操作列を消さない。
     if (!(CMTIME_IS_VALID(self.loopStartTime) && !CMTIME_IS_VALID(self.loopEndTime))) {
         self.speedHideTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self selector:@selector(hideSpeedControls) userInfo:nil repeats:NO];
@@ -612,12 +1228,15 @@
 }
 
 - (void)hideSpeedControls {
+    if (self.drawingMode) return;
     self.speedControlContainer.hidden = YES;
     self.featureControlContainer.hidden = YES;
     self.playButton.hidden = YES;
     self.frameStepButton.hidden = YES;
     self.favoriteButton.hidden = YES;
     self.deleteButton.hidden = YES;
+    self.drawingButton.hidden = YES;
+    self.drawingPalette.hidden = YES;
 }
 
 - (void)speedSliderChanged:(UISlider *)slider {
@@ -658,6 +1277,7 @@
     // シーク操作中のつまみの揺れを防ぐため、最初のタップ時点で停止する。
     [self.player pause];
     [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+    self.drawingButton.hidden = NO;
     CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600);
     [self.player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
     [self showSpeedControls];
@@ -671,6 +1291,11 @@
         self.player.rate = self.wjSelectedSpeed;
         [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal];
     }
+    self.drawingButton.hidden = self.player.rate > 0;
+    if (self.player.rate > 0) {
+        self.drawingCanvas.drawingEnabled = NO;
+        self.drawingPalette.hidden = YES;
+    }
     [self showSpeedControls];
 }
 
@@ -683,6 +1308,57 @@
     if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = sender; activity.popoverPresentationController.sourceRect = [sender bounds]; }
     [self presentViewController:activity animated:YES completion:nil];
 }
+
+- (NSString *)wjExportTimestamp { NSDateFormatter *f = [NSDateFormatter new]; f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; f.dateFormat = @"yyyyMMddHHmmssSSS"; return [f stringFromDate:[NSDate date]]; }
+- (NSURL *)wjExportDirectory { NSURL *base = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject]; NSURL *dir = [base URLByAppendingPathComponent:@"Recordings" isDirectory:YES]; [[NSFileManager defaultManager] createDirectoryAtURL:dir withIntermediateDirectories:YES attributes:nil error:nil]; return dir; }
+- (UIColor *)wjAnnotationColor:(NSDictionary *)item { return [UIColor colorWithRed:[item[@"r"] doubleValue] green:[item[@"g"] doubleValue] blue:[item[@"b"] doubleValue] alpha:item[@"a"] ? [item[@"a"] doubleValue] : 1.0]; }
+- (UIColor *)wjAnnotationTextColorForBackground:(UIColor *)background {
+    CGFloat red = 0, green = 0, blue = 0, alpha = 1; [background getRed:&red green:&green blue:&blue alpha:&alpha];
+    BOOL useBlack = ((red > .75 && green > .75 && blue < .35) || (green > .65 && red < .35 && blue < .35) || (red > .82 && green > .82 && blue > .82));
+    return useBlack ? UIColor.blackColor : UIColor.whiteColor;
+}
+- (void)wjAnimateAnnotationLayer:(CALayer *)layer item:(NSDictionary *)item duration:(CFTimeInterval)duration {
+    double start = [item[@"start"] doubleValue]; id endValue = item[@"end"]; double end = ([endValue isKindOfClass:NSNumber.class] ? [endValue doubleValue] : duration);
+    start = MAX(0, MIN(duration, start)); end = MAX(start, MIN(duration, end));
+    if (end <= start) end = MIN(duration, start + .05);
+    layer.opacity = 0;
+    CAKeyframeAnimation *fade = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+    fade.values = @[@0.0, @0.0, @1.0, @1.0, @0.0];
+    fade.keyTimes = @[@0.0, @(start / MAX(duration, .001)), @(start / MAX(duration, .001)), @(end / MAX(duration, .001)), @(end / MAX(duration, .001))];
+    fade.duration = duration; fade.beginTime = AVCoreAnimationBeginTimeAtZero; fade.removedOnCompletion = NO; fade.fillMode = kCAFillModeBoth;
+    [layer addAnimation:fade forKey:@"wjAnnotationVisibility"];
+}
+- (void)wjAddDrawingOverlayToLayer:(CALayer *)overlay renderSize:(CGSize)size duration:(CFTimeInterval)duration {
+    for (NSDictionary *item in self.drawingAnnotations) {
+        NSArray *raw = item[@"points"]; if (![raw isKindOfClass:NSArray.class] || raw.count == 0) continue;
+        NSMutableArray<NSValue *> *points = [NSMutableArray array];
+        for (NSArray *p in raw) if ([p isKindOfClass:NSArray.class] && p.count >= 2) [points addObject:[NSValue valueWithCGPoint:CGPointMake([p[0] doubleValue] * size.width, [p[1] doubleValue] * size.height)]];
+        if (!points.count) continue;
+        UIColor *color = [self wjAnnotationColor:item]; CGFloat width = MAX(2.0, [item[@"width"] doubleValue] ?: 3.0);
+        CAShapeLayer *shape = [CAShapeLayer layer]; shape.frame = CGRectMake(0, 0, size.width, size.height); shape.strokeColor = color.CGColor; shape.fillColor = UIColor.clearColor.CGColor; shape.lineWidth = width; shape.lineCap = kCALineCapRound; shape.lineJoin = kCALineJoinRound;
+        NSString *style = item[@"style"]; if ([style isEqualToString:@"点線"]) shape.lineDashPattern = @[@4, @4]; else if ([style isEqualToString:@"鎖線"]) shape.lineDashPattern = @[@12, @8];
+        CGMutablePathRef path = CGPathCreateMutable(); NSString *tool = item[@"tool"] ?: @"直線"; CGPoint first = points.firstObject.CGPointValue, last = points.lastObject.CGPointValue;
+        if ([tool isEqualToString:@"丸"]) { CGFloat r = hypot(last.x-first.x,last.y-first.y); CGPathAddEllipseInRect(path, NULL, CGRectMake(first.x-r, first.y-r, r*2, r*2)); shape.fillColor = [color colorWithAlphaComponent:.2].CGColor; }
+        else if ([tool isEqualToString:@"楕円"] || [tool isEqualToString:@"四角"] || [tool isEqualToString:@"三角"]) { CGRect rect = CGRectStandardize(CGRectMake(first.x, first.y, last.x-first.x, last.y-first.y)); if ([tool isEqualToString:@"楕円"]) CGPathAddEllipseInRect(path, NULL, rect); else if ([tool isEqualToString:@"三角"]) { CGPathMoveToPoint(path,NULL,CGRectGetMidX(rect),CGRectGetMinY(rect)); CGPathAddLineToPoint(path,NULL,CGRectGetMaxX(rect),CGRectGetMaxY(rect)); CGPathAddLineToPoint(path,NULL,CGRectGetMinX(rect),CGRectGetMaxY(rect)); CGPathCloseSubpath(path); } else CGPathAddRect(path,NULL,rect); shape.fillColor = [color colorWithAlphaComponent:.2].CGColor; }
+        else if ([tool isEqualToString:@"x"]) { CGPathMoveToPoint(path,NULL,first.x-12,first.y-12); CGPathAddLineToPoint(path,NULL,first.x+12,first.y+12); CGPathMoveToPoint(path,NULL,first.x+12,first.y-12); CGPathAddLineToPoint(path,NULL,first.x-12,first.y+12); }
+        else { CGPathMoveToPoint(path,NULL,first.x,first.y); for (NSValue *v in points.count > 1 ? [points subarrayWithRange:NSMakeRange(1, points.count-1)] : @[]) { CGPoint p = v.CGPointValue; CGPathAddLineToPoint(path,NULL,p.x,p.y); } }
+        shape.path = path; CGPathRelease(path); [overlay addSublayer:shape]; [self wjAnimateAnnotationLayer:shape item:item duration:duration];
+        NSString *text = item[@"text"]; NSNumber *angle = item[@"angle"]; if (text.length == 0 && angle) text = [NSString stringWithFormat:@"%.1f°", angle.doubleValue];
+        if (text.length) { CATextLayer *label = [CATextLayer layer]; label.string = text; label.font = (__bridge CFTypeRef)@"Helvetica-Bold"; label.fontSize = 20; label.alignmentMode = kCAAlignmentCenter; label.contentsScale = UIScreen.mainScreen.scale; label.foregroundColor = [self wjAnnotationTextColorForBackground:color].CGColor; label.backgroundColor = [color colorWithAlphaComponent:.8].CGColor; label.cornerRadius = 5; label.frame = CGRectMake(last.x - 42, last.y - 16, 84, 32); [overlay addSublayer:label]; [self wjAnimateAnnotationLayer:label item:item duration:duration]; }
+    }
+}
+- (void)exportDrawingVideo:(id)sender {
+    NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL]; if (!url) return;
+    if (!self.drawingAnnotations.count) [self loadDrawingAnnotations];
+    AVAsset *asset = [AVAsset assetWithURL:url]; AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject; if (!track) return;
+    CMTime duration = asset.duration; CGSize render = WJDrawingOrientedTrackSize(track);
+    AVMutableComposition *composition = [AVMutableComposition composition]; AVMutableCompositionTrack *compTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid]; AVAssetTrack *audioTrack = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject; AVMutableCompositionTrack *audioComp = audioTrack ? [composition addMutableTrackWithMediaType:AVMediaTypeAudio preferredTrackID:kCMPersistentTrackID_Invalid] : nil; NSError *error = nil; [compTrack insertTimeRange:CMTimeRangeMake(kCMTimeZero,duration) ofTrack:track atTime:kCMTimeZero error:&error]; if (audioComp) [audioComp insertTimeRange:CMTimeRangeMake(kCMTimeZero,duration) ofTrack:audioTrack atTime:kCMTimeZero error:&error]; if (error) { [self showExportError:error]; return; }
+    AVMutableVideoComposition *videoComposition = [AVMutableVideoComposition videoComposition]; videoComposition.renderSize = render; videoComposition.frameDuration = CMTimeMake(1, 30); AVMutableVideoCompositionInstruction *instruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction]; instruction.timeRange = CMTimeRangeMake(kCMTimeZero,duration); AVMutableVideoCompositionLayerInstruction *layerInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:compTrack]; [layerInstruction setTransform:WJDrawingNormalizedTrackTransform(track) atTime:kCMTimeZero]; instruction.layerInstructions = @[layerInstruction]; videoComposition.instructions = @[instruction];
+    CALayer *parent = [CALayer layer]; parent.frame = CGRectMake(0,0,render.width,render.height); parent.geometryFlipped = YES; CALayer *videoLayer = [CALayer layer]; videoLayer.frame = parent.bounds; [parent addSublayer:videoLayer]; CALayer *overlay = [CALayer layer]; overlay.frame = parent.bounds; [parent addSublayer:overlay]; [self wjAddDrawingOverlayToLayer:overlay renderSize:render duration:CMTimeGetSeconds(duration)]; videoComposition.animationTool = [AVVideoCompositionCoreAnimationTool videoCompositionCoreAnimationToolWithPostProcessingAsVideoLayer:videoLayer inLayer:parent];
+    NSString *stem = [[url URLByDeletingPathExtension].lastPathComponent stringByReplacingOccurrencesOfString:@"/" withString:@"_"]; NSURL *output = [[self wjExportDirectory] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_DRAWING_%@.MOV", stem, [self wjExportTimestamp]]]; AVAssetExportSession *session = [[AVAssetExportSession alloc] initWithAsset:composition presetName:AVAssetExportPresetHighestQuality]; session.outputURL = output; session.outputFileType = AVFileTypeQuickTimeMovie; session.videoComposition = videoComposition; if (audioComp) { AVMutableAudioMix *audioMix = [AVMutableAudioMix audioMix]; AVMutableAudioMixInputParameters *parameters = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:audioComp]; [parameters setVolume:1.0 atTime:kCMTimeZero]; audioMix.inputParameters = @[parameters]; session.audioMix = audioMix; } self.exportButton.enabled = NO; [session exportAsynchronouslyWithCompletionHandler:^{ dispatch_async(dispatch_get_main_queue(), ^{ self.exportButton.enabled = YES; if (session.status == AVAssetExportSessionStatusCompleted) [self presentExportedFile:output from:self.exportButton]; else [self showExportError:session.error ?: [NSError errorWithDomain:@"MTJudge.Export" code:2 userInfo:@{NSLocalizedDescriptionKey:@"描画付き動画を書き出せませんでした。"}]]; }); }];
+}
+- (void)presentExportedFile:(NSURL *)url from:(UIView *)source { UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil]; if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = source; activity.popoverPresentationController.sourceRect = source.bounds; } [self presentViewController:activity animated:YES completion:nil]; }
+- (void)showExportError:(NSError *)error { UIAlertController *a = [UIAlertController alertControllerWithTitle:@"書き出し失敗" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert]; [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:a animated:YES completion:nil]; }
 
 - (void)toggleFavorite:(id)sender {
     NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
@@ -729,7 +1405,7 @@
     [alert addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         NSFileManager *files = NSFileManager.defaultManager;
         NSError *error = nil;
-        for (NSURL *target in @[url, [url URLByAppendingPathExtension:@"wj.json"], [url URLByAppendingPathExtension:@"tags.json"], [url URLByAppendingPathExtension:@"pose.json"]]) {
+        for (NSURL *target in WJPlayerVideoAndRelatedJSONFiles(url)) {
             if ([files fileExistsAtPath:target.path] && ![files removeItemAtURL:target error:&error]) break;
         }
         if (error) {

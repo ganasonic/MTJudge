@@ -1,4 +1,14 @@
 #import "VideoRecordingViewController.h"
+
+static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
+    if (!videoURL) return @[];
+    NSMutableArray<NSURL *> *targets = [NSMutableArray arrayWithObject:videoURL];
+    NSURL *directory = [videoURL URLByDeletingLastPathComponent];
+    NSString *prefix = [videoURL.lastPathComponent stringByAppendingString:@"."];
+    NSArray<NSURL *> *entries = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:directory includingPropertiesForKeys:nil options:0 error:nil];
+    for (NSURL *entry in entries) if ([entry.lastPathComponent hasPrefix:prefix] && [entry.lastPathComponent.lowercaseString hasSuffix:@".json"]) [targets addObject:entry];
+    return targets;
+}
 #import "TagListViewController.h" // 追加
 #import "TagSelectionViewController.h"
 #import "FileSaver.h"
@@ -815,7 +825,10 @@
             [self presentViewController:failure animated:YES completion:nil];
             return;
         }
-        [[NSFileManager defaultManager] removeItemAtPath:[url.path stringByAppendingString:@".tags.json"] error:nil];
+        for (NSURL *target in WJCameraVideoAndRelatedJSONFiles(url)) {
+            if ([target isEqual:url]) continue;
+            [[NSFileManager defaultManager] removeItemAtURL:target error:nil];
+        }
         self.latestRecordingURL = nil;
         if ([self.pendingRecordingURL isEqual:url]) self.pendingRecordingURL = nil;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingPath"];

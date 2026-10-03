@@ -1,4 +1,17 @@
 #import "WaterJumpSettingsViewController.h"
+
+static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
+    if (!videoURL) return @[];
+    NSMutableArray<NSURL *> *targets = [NSMutableArray arrayWithObject:videoURL];
+    NSURL *directory = [videoURL URLByDeletingLastPathComponent];
+    NSString *prefix = [videoURL.lastPathComponent stringByAppendingString:@"."];
+    NSArray<NSURL *> *entries = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:directory includingPropertiesForKeys:nil options:0 error:nil];
+    for (NSURL *entry in entries) {
+        NSString *name = entry.lastPathComponent.lowercaseString;
+        if ([entry.lastPathComponent hasPrefix:prefix] && [name hasSuffix:@".json"]) [targets addObject:entry];
+    }
+    return targets;
+}
 #import "WaterJumpCoordinator.h"
 #import "MTJudge-Swift.h"
 #import "WaterJumpReceivedPlayerViewController.h"
@@ -225,9 +238,11 @@ static UIImage *WJQRCodeImage(NSString *value) {
     self.tableView.allowsMultipleSelectionDuringEditing = YES;
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(endMultiSelect)];
     UIBarButtonItem *share = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(shareSelectedVideos)];
+    UIBarButtonItem *transfer = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.doc"] style:UIBarButtonItemStylePlain target:self action:@selector(transferSelectedVideos)];
+    transfer.accessibilityLabel = @"選択した動画と関連JSONをMTJudgeへ転送";
     UIBarButtonItem *delete = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash target:self action:@selector(deleteSelectedVideos)];
     delete.tintColor = UIColor.systemRedColor;
-    self.navigationItem.rightBarButtonItems = @[delete, share];
+    self.navigationItem.rightBarButtonItems = @[delete, transfer, share];
 }
 - (void)endMultiSelect {
     self.editing = NO;
@@ -248,16 +263,19 @@ static UIImage *WJQRCodeImage(NSString *value) {
     if (activity.popoverPresentationController) { activity.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItems.lastObject; }
     [self presentViewController:activity animated:YES completion:nil];
 }
+- (void)transferSelectedVideos {
+    NSArray<NSURL *> *urls = [self selectedVideoURLs];
+    if (!urls.count) return;
+    for (NSURL *url in urls) [[WaterJumpCoordinator shared] retransferVideoURL:url];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"転送を開始しました" message:@"選択した動画と、同じ動画名に紐づくJSONを登録済みのMTJudge端末へ転送します。受信側のRecordingsへ保存されます。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
 - (void)deleteSelectedVideos {
     NSArray<NSURL *> *urls = [self selectedVideoURLs];
     if (!urls.count) return;
     NSFileManager *files = NSFileManager.defaultManager;
-    for (NSURL *url in urls) {
-        for (NSString *suffix in @[@"", @".wj.json", @".tags.json", @".pose.json"]) {
-            NSURL *target = suffix.length ? [NSURL fileURLWithPath:[url.path stringByAppendingString:suffix]] : url;
-            [files removeItemAtURL:target error:nil];
-        }
-    }
+    for (NSURL *url in urls) for (NSURL *target in WJVideoAndRelatedJSONFiles(url)) [files removeItemAtURL:target error:nil];
     [self endMultiSelect];
     [self refreshVideos];
 }
@@ -354,8 +372,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     if (!url || row == NSNotFound || ![url.pathExtension.lowercaseString isEqualToString:@"mov"]) return;
     NSError *error = nil;
     NSFileManager *files = NSFileManager.defaultManager;
-    NSArray<NSURL *> *targets = @[url, [url URLByAppendingPathExtension:@"wj.json"], [url URLByAppendingPathExtension:@"tags.json"], [url URLByAppendingPathExtension:@"pose.json"]];
-    for (NSURL *target in targets) {
+    for (NSURL *target in WJVideoAndRelatedJSONFiles(url)) {
         if (![files fileExistsAtPath:target.path]) continue;
         NSError *removeError = nil;
         if (![files removeItemAtURL:target error:&removeError]) { error = removeError; break; }
