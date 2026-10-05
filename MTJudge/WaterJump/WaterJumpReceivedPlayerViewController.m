@@ -4,6 +4,7 @@
 #import "../Analysis/VideoPoseAnalysisManager.h"
 #import "../Analysis/TakeoffAnalysisConfig.h"
 #import "../Analysis/TakeoffAngleAnalyzer.h"
+#import "../StrobeFeature.h"
 
 static CGSize WJDrawingOrientedTrackSize(AVAssetTrack *track) {
     CGRect rect = CGRectApplyAffineTransform(CGRectMake(0, 0, fabs(track.naturalSize.width), fabs(track.naturalSize.height)), track.preferredTransform);
@@ -173,12 +174,16 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UISlider *speedSlider;
 @property (nonatomic, strong) UISlider *positionSlider;
 @property (nonatomic, strong) UILabel *speedValueLabel;
+@property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) NSTimer *speedHideTimer;
 @property (nonatomic, strong) UIView *featureControlContainer;
 @property (nonatomic, strong) UIButton *loopStartButton;
 @property (nonatomic, strong) UIButton *loopEndButton;
 @property (nonatomic, strong) UIButton *loopButton;
 @property (nonatomic, strong) UIButton *frameStepButton;
+@property (nonatomic, strong) UILongPressGestureRecognizer *slowMotionGesture;
+@property (nonatomic, assign) BOOL slowMotionActive;
+@property (nonatomic, assign) BOOL suppressNextFrameStep;
 @property (nonatomic, strong) UIButton *mirrorButton;
 @property (nonatomic, assign) CMTime loopStartTime;
 @property (nonatomic, assign) CMTime loopEndTime;
@@ -193,6 +198,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, copy) NSArray<NSDictionary *> *analysisFrames;
 @property (nonatomic, strong) TakeoffAnalysisConfig *takeoffConfig;
 @property (nonatomic, strong) UIButton *takeoffButton;
+@property (nonatomic, strong) UIButton *strobeButton;
 @property (nonatomic, strong) UIButton *skeletonButton;
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIButton *closeButton;
@@ -363,7 +369,15 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)playerDidReachEnd:(NSNotification *)notification {
-    if (notification.object == self.player.currentItem) [self handleAutomaticLoopAtEnd];
+    if (notification.object != self.player.currentItem) return;
+    if (self.playbackEndedHandler) {
+        self.player.rate = 0;
+        void (^handler)(void) = self.playbackEndedHandler;
+        self.playbackEndedHandler = nil;
+        [self dismissViewControllerAnimated:YES completion:handler];
+        return;
+    }
+    [self handleAutomaticLoopAtEnd];
 }
 
 - (void)loadAnalysisForCurrentVideo {
@@ -526,8 +540,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.speedSlider.minimumValue = 0.25;
     self.speedSlider.maximumValue = 1.0;
     self.speedSlider.value = 1.0;
-    self.speedSlider.minimumTrackTintColor = UIColor.whiteColor;
-    self.speedSlider.maximumTrackTintColor = [UIColor colorWithWhite:1 alpha:0.35];
+    self.speedSlider.minimumTrackTintColor = [UIColor colorWithWhite:0.82 alpha:0.75];
+    self.speedSlider.maximumTrackTintColor = [UIColor colorWithWhite:0.55 alpha:0.35];
     self.speedSlider.accessibilityLabel = @"再生速度";
     [self.speedSlider addTarget:self action:@selector(speedSliderChanged:) forControlEvents:UIControlEventValueChanged];
     self.speedValueLabel = [UILabel new];
@@ -535,8 +549,16 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.speedValueLabel.textColor = UIColor.whiteColor;
     self.speedValueLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
     self.speedValueLabel.text = @"1.00×";
+    self.timeLabel = [UILabel new];
+    self.timeLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.timeLabel.textColor = [UIColor colorWithWhite:1 alpha:.82];
+    self.timeLabel.font = [UIFont monospacedDigitSystemFontOfSize:10 weight:UIFontWeightMedium];
+    self.timeLabel.text = @"00:00.00/00:00.00";
+    self.timeLabel.adjustsFontSizeToFitWidth = YES;
+    self.timeLabel.minimumScaleFactor = .65;
     [self.speedControlContainer addSubview:self.speedSlider];
     [self.speedControlContainer addSubview:self.speedValueLabel];
+    [self.speedControlContainer addSubview:self.timeLabel];
     self.positionSlider = [UISlider new];
     self.positionSlider.translatesAutoresizingMaskIntoConstraints = NO;
     self.positionSlider.minimumValue = 0;
@@ -552,7 +574,10 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.speedControlContainer.widthAnchor constraintLessThanOrEqualToConstant:900],
         [self.speedControlContainer.heightAnchor constraintEqualToConstant:88],
         // シークバーは左右の操作ボタンの間だけを使う。
-        [self.positionSlider.leadingAnchor constraintEqualToAnchor:self.speedControlContainer.leadingAnchor constant:58],
+        [self.timeLabel.leadingAnchor constraintEqualToAnchor:self.speedControlContainer.leadingAnchor constant:58],
+        [self.timeLabel.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor],
+        [self.timeLabel.widthAnchor constraintEqualToConstant:88],
+        [self.positionSlider.leadingAnchor constraintEqualToAnchor:self.speedControlContainer.leadingAnchor constant:150],
         [self.positionSlider.trailingAnchor constraintEqualToAnchor:self.speedControlContainer.trailingAnchor constant:-58],
         [self.positionSlider.centerYAnchor constraintEqualToAnchor:self.speedControlContainer.topAnchor constant:30],
         [self.speedSlider.leadingAnchor constraintEqualToAnchor:self.speedControlContainer.leadingAnchor constant:12],
@@ -573,11 +598,17 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.loopEndButton = [self featureButtonWithSymbol:@"b.circle" action:@selector(setLoopEnd:) label:@"B点を設定"];
     self.loopButton = [self featureButtonWithSymbol:@"repeat" action:@selector(toggleLoop:) label:@"A-Bリピート"];
     self.frameStepButton = [self featureButtonWithSymbol:@"forward.frame" action:@selector(stepOneFrame:) label:@"1フレーム進む"];
+    self.slowMotionGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(frameStepLongPressed:)];
+    self.slowMotionGesture.minimumPressDuration = 0.45;
+    self.slowMotionGesture.cancelsTouchesInView = YES;
+    [self.frameStepButton addGestureRecognizer:self.slowMotionGesture];
     self.mirrorButton = [self featureButtonWithSymbol:@"arrow.left.and.right.righttriangle.left.righttriangle.right" action:@selector(toggleMirror:) label:@"左右反転"];
     self.takeoffButton = [self featureButtonWithSymbol:@"figure.skiing.downhill" action:@selector(toggleTakeoffSetup:) label:@"Takeoff解析設定"];
     self.takeoffButton.enabled = NO;
     self.takeoffButton.alpha = .4;
     self.skeletonButton = [self featureButtonWithSymbol:@"figure.stand" action:@selector(toggleSkeleton:) label:@"骨格線表示"];
+    self.strobeButton = [self featureButtonWithSymbol:@"camera.aperture" action:@selector(toggleStrobe:) label:@"ストロボ画像"];
+    self.strobeButton.tintColor = UIColor.systemOrangeColor;
     self.deleteButton = [self featureButtonWithSymbol:@"trash" action:@selector(deleteCurrentVideo:) label:@"再生中の動画を削除"];
     self.deleteButton.tintColor = UIColor.systemRedColor;
     self.deleteButton.hidden = YES;
@@ -676,7 +707,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.exportButton.widthAnchor constraintEqualToConstant:38], [self.exportButton.heightAnchor constraintEqualToConstant:36]
     ]];
     // A点からTakeoffまでを画面幅の80%に広げ、均等間隔で配置する。
-    UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.mirrorButton, self.skeletonButton, self.takeoffButton]];
+    UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.mirrorButton, self.skeletonButton, self.takeoffButton, self.strobeButton]];
     featureStack.translatesAutoresizingMaskIntoConstraints = NO;
     featureStack.axis = UILayoutConstraintAxisHorizontal;
     featureStack.alignment = UIStackViewAlignmentCenter;
@@ -686,7 +717,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [NSLayoutConstraint activateConstraints:@[
         [self.featureControlContainer.centerXAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerXAnchor],
         [self.featureControlContainer.bottomAnchor constraintEqualToAnchor:self.speedControlContainer.topAnchor constant:-8],
-        [self.featureControlContainer.widthAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.widthAnchor multiplier:0.8],
+        [self.featureControlContainer.widthAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.widthAnchor multiplier:0.94],
         [self.featureControlContainer.widthAnchor constraintLessThanOrEqualToConstant:700],
         [self.featureControlContainer.heightAnchor constraintEqualToConstant:44],
         [featureStack.leadingAnchor constraintEqualToAnchor:self.featureControlContainer.leadingAnchor constant:8],
@@ -1201,6 +1232,18 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self showSpeedControls];
 }
 
+- (void)toggleStrobe:(id)sender {
+    NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
+    if (!url) return;
+    [self.player pause];
+    [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+    __weak typeof(self) weakSelf = self;
+    StrobeConfigurationViewController *configuration = [[StrobeConfigurationViewController alloc] initWithVideoURL:url completion:^(NSURL *outputURL) {
+        [weakSelf showSpeedControls];
+    }];
+    [self presentViewController:configuration animated:YES completion:nil];
+}
+
 - (void)showSpeedControls {
     self.speedControlContainer.hidden = NO;
     self.featureControlContainer.hidden = NO;
@@ -1269,6 +1312,14 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     double duration = CMTimeGetSeconds(self.player.currentItem.duration);
     double current = CMTimeGetSeconds(self.player.currentTime);
     if (isfinite(duration) && duration > 0 && isfinite(current) && !self.positionSlider.isTracking) self.positionSlider.value = MIN(1.0, MAX(0.0, current / duration));
+    if (isfinite(duration) && duration > 0 && isfinite(current)) self.timeLabel.text = [NSString stringWithFormat:@"%@/%@", [self formattedPlaybackTime:current], [self formattedPlaybackTime:duration]];
+}
+
+- (NSString *)formattedPlaybackTime:(double)seconds {
+    if (!isfinite(seconds) || seconds < 0) seconds = 0;
+    NSInteger minutes = (NSInteger)(seconds / 60.0);
+    double remainder = seconds - (minutes * 60.0);
+    return [NSString stringWithFormat:@"%02ld:%05.2f", (long)minutes, remainder];
 }
 
 - (void)positionSliderChanged:(UISlider *)slider {
@@ -1280,6 +1331,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.drawingButton.hidden = NO;
     CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600);
     [self.player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
+    self.timeLabel.text = [NSString stringWithFormat:@"%@/%@", [self formattedPlaybackTime:duration * slider.value], [self formattedPlaybackTime:duration]];
     [self showSpeedControls];
 }
 
@@ -1299,7 +1351,11 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self showSpeedControls];
 }
 
-- (void)closePlayer:(id)sender { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)closePlayer:(id)sender {
+    void (^handler)(void) = self.closeHandler;
+    self.closeHandler = nil;
+    [self dismissViewControllerAnimated:YES completion:handler];
+}
 
 - (void)shareCurrentVideo:(id)sender {
     NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
@@ -1457,11 +1513,34 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)stepOneFrame:(id)sender {
+    if (self.slowMotionActive || self.suppressNextFrameStep) {
+        self.suppressNextFrameStep = NO;
+        return;
+    }
     [self.player pause];
     CMTime next = CMTimeAdd(self.player.currentTime, [self videoFrameDuration]);
     CMTime duration = self.player.currentItem.duration;
     if (CMTIME_IS_VALID(duration) && CMTimeCompare(next, duration) > 0) next = duration;
     [self.player seekToTime:next toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
+}
+
+- (void)frameStepLongPressed:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        self.slowMotionActive = YES;
+        self.suppressNextFrameStep = NO;
+        self.wjSelectedSpeed = 0.5f;
+        [self updateSpeedSlider];
+        self.player.rate = 0.5f;
+        [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal];
+        [self showSpeedControls];
+    } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
+        if (!self.slowMotionActive) return;
+        self.slowMotionActive = NO;
+        self.suppressNextFrameStep = YES;
+        [self.player pause];
+        [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+        [self showSpeedControls];
+    }
 }
 
 - (void)applyMirrorToPlayerLayers {

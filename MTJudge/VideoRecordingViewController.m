@@ -19,6 +19,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 #import <Vision/Vision.h>
 #import "SkeletonConnections.h"
 #import "WaterJump/WaterJumpReceivedPlayerViewController.h"
+#import "StrobeFeature.h"
 #import <QuartzCore/QuartzCore.h>
 
 // トラックの任意の位置へのタップと、そのままのドラッグに対応する。
@@ -74,6 +75,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) CAShapeLayer *guideLayer;
 @property (nonatomic, assign) BOOL guideEnabled;
 @property (nonatomic, strong) UIButton *saveButton;
+@property (nonatomic, strong) UIButton *strobeButton;
+@property (nonatomic, assign) BOOL strobeEnabled;
 @property (nonatomic, strong) UIActivityIndicatorView *recordingActivity;
 @property (nonatomic, strong) UIVisualEffectView *zoomControls;
 @property (nonatomic, strong) UIButton *zoomInButton;
@@ -739,6 +742,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     tagEditGesture.minimumPressDuration = .6;
     [self.tagButton addGestureRecognizer:tagEditGesture];
     self.guideButton = [self cameraButtonWithAction:@selector(toggleGuide:)];
+    self.strobeButton = [self cameraButtonWithAction:@selector(toggleStrobe:)];
     self.deleteButton = [self cameraButtonWithAction:@selector(deleteLatestRecording:)];
     self.saveButton = [self cameraButtonWithAction:@selector(presentRecordingSavePicker)];
     // 録画ボタンだけはシャッター操作に近い右側中央へ独立配置する。
@@ -751,7 +755,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.recordButton.widthAnchor constraintEqualToConstant:56],
         [self.recordButton.heightAnchor constraintEqualToConstant:56]
     ]];
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.deleteButton, self.saveButton]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.strobeButton, self.deleteButton, self.saveButton]];
     stack.axis = UILayoutConstraintAxisHorizontal;
     stack.spacing = 4;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -773,6 +777,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)updateCameraControls {
     BOOL recording = self.videoRecorder.isRecording;
     BOOL playing = self.player != nil;
+    UIColor *neutral = [UIColor colorWithWhite:0.22 alpha:0.95];
     self.playbackControls.hidden = !playing;
     [self updateZoomControls];
     if (playing) [self.playbackControls.superview bringSubviewToFront:self.playbackControls];
@@ -788,8 +793,11 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.saveButton.enabled = !playing;
     self.guideButton.hidden = self.pendingRecordingURL != nil;
     self.guideButton.enabled = !playing;
+    // 録画前でもボタンを操作できるようにし、動画がない場合はタップ時に案内する。
+    self.strobeButton.enabled = !recording && !playing && !self.finishingRecording;
+    [self styleButton:self.strobeButton title:self.strobeEnabled ? @"ストロボOFF" : @"ストロボ" symbol:@"camera.aperture" color:self.strobeEnabled ? UIColor.systemOrangeColor : neutral];
+    self.strobeButton.accessibilityValue = self.strobeEnabled ? @"ON" : @"OFF";
     self.guideView.hidden = !self.guideEnabled || playing;
-    UIColor *neutral = [UIColor colorWithWhite:0.22 alpha:0.95];
     [self styleButton:self.recordButton title:recording ? @"録画停止" : @"録画開始" symbol:recording ? @"stop.fill" : @"record.circle" color:UIColor.systemRedColor];
     self.recordButton.backgroundColor = [[UIColor colorWithRed:0.88 green:0.03 blue:0.03 alpha:1.0] colorWithAlphaComponent:0.82];
     self.recordButton.alpha = self.recordButton.enabled ? 0.98 : 0.35;
@@ -808,6 +816,23 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self styleButton:self.guideButton title:self.guideEnabled ? @"十字ガイドを非表示" : @"十字ガイドを表示" symbol:@"scope" color:self.guideEnabled ? UIColor.systemBlueColor : neutral];
     self.guideButton.accessibilityValue = self.guideEnabled ? @"表示中" : @"非表示";
     [self styleButton:self.saveButton title:@"保存先を選択" symbol:@"square.and.arrow.down" color:neutral];
+}
+
+- (void)toggleStrobe:(id)sender {
+    if (self.videoRecorder.isRecording || self.player || self.finishingRecording) return;
+    NSURL *sourceURL = self.latestRecordingURL ?: self.pendingRecordingURL;
+    if (!sourceURL || ![[NSFileManager defaultManager] fileExistsAtPath:sourceURL.path]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"ストロボ画像" message:@"先に動画を録画してください。" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil]; return;
+    }
+    self.strobeEnabled = !self.strobeEnabled;
+    [self updateCameraControls];
+    if (!self.strobeEnabled) return;
+    __weak typeof(self) weakSelf = self;
+    StrobeConfigurationViewController *configuration = [[StrobeConfigurationViewController alloc] initWithVideoURL:sourceURL completion:^(NSURL *outputURL) {
+        weakSelf.strobeEnabled = NO; [weakSelf updateCameraControls];
+    }];
+    [self presentViewController:configuration animated:YES completion:nil];
 }
 
 - (void)deleteLatestRecording:(id)sender {
@@ -978,42 +1003,24 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)togglePlayback:(id)sender {
-    if (self.player) {
-        [self stopPlayback];
-        return;
-    }
-    if (!self.latestRecordingURL || self.videoRecorder.isRecording || self.finishingRecording) return;
-    AVPlayerItem *item = [AVPlayerItem playerItemWithURL:self.latestRecordingURL];
-    self.player = [AVPlayer playerWithPlayerItem:item];
-    self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
-    self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
-    self.playerLayer.frame = self.playbackView.bounds;
-    [self.playbackView.layer addSublayer:self.playerLayer];
-    [self.previewView bringSubviewToFront:self.playbackView];
-    self.playbackView.hidden = NO;
-    self.drawingLayer.hidden = YES;
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackEnded:) name:AVPlayerItemDidPlayToEndTimeNotification object:item];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(playbackFailed:) name:AVPlayerItemFailedToPlayToEndTimeNotification object:item];
-    [item addObserver:self forKeyPath:@"status" options:NSKeyValueObservingOptionNew context:NULL];
-    self.requestedSeekTime = kCMTimeInvalid;
-    self.loopStartTime = kCMTimeInvalid;
-    self.loopEndTime = kCMTimeInvalid;
-    self.loopEnabled = NO;
-    self.mirroredPlayback = NO;
-    [self updatePlaybackProgress];
+    if (self.videoRecorder.isRecording || self.finishingRecording) return;
+    if (self.presentedViewController) return;
+    NSURL *url = self.latestRecordingURL ?: self.pendingRecordingURL;
+    if (!url || ![[NSFileManager defaultManager] fileExistsAtPath:url.path]) return;
     __weak typeof(self) weakSelf = self;
-    self.playbackTimeObserver = [self.player addPeriodicTimeObserverForInterval:CMTimeMake(1, 10) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
-        if (weakSelf.loopEnabled && CMTIME_IS_VALID(weakSelf.loopStartTime) && CMTIME_IS_VALID(weakSelf.loopEndTime) && CMTimeCompare(weakSelf.loopEndTime, weakSelf.loopStartTime) > 0 && CMTimeCompare(time, weakSelf.loopEndTime) >= 0 && !weakSelf.seeking) {
-            AVPlayer *loopPlayer = weakSelf.player;
-            weakSelf.seeking = YES;
-            [loopPlayer seekToTime:weakSelf.loopStartTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
-                dispatch_async(dispatch_get_main_queue(), ^{ if (weakSelf.player == loopPlayer) { weakSelf.seeking = NO; loopPlayer.rate = weakSelf.playbackSpeed; } });
-            }];
-        }
-        [weakSelf updatePlaybackProgress];
-    }];
-    self.player.rate = self.playbackSpeed;
-    [self updateCameraControls];
+    WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url];
+    player.closeHandler = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        UIViewController *library = [WaterJumpSettingsViewController videoLibraryViewController];
+        [strongSelf presentViewController:[[UINavigationController alloc] initWithRootViewController:library] animated:YES completion:nil];
+    };
+    player.playbackEndedHandler = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        [strongSelf updateCameraControls];
+    };
+    player.modalPresentationStyle = UIModalPresentationFullScreen;
+    [self presentViewController:player animated:YES completion:^{ [player.player play]; }];
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {

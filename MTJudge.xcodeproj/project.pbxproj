@@ -80,6 +80,7 @@
 		CA85EECF2E817E99002BF359 /* TagItemSelectionViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CA85EECE2E817E99002BF359 /* TagItemSelectionViewController.m */; };
 		CAF09A3D2E64626F000CAC92 /* data.json in Resources */ = {isa = PBXBuildFile; fileRef = CAF09A3C2E64626F000CAC92 /* data.json */; };
 		CE1AC20150413B92F0CBA1FE /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = FF91EA9C2F93729761AA04FF /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m */; };
+		D3E4F5A60000000000000001 /* StrobeFeature.m in Sources */ = {isa = PBXBuildFile; fileRef = D3E4F5A60000000000000003 /* StrobeFeature.m */; };
 		D7E05DFE6A6C28C4E399AF1D /* MTJudge/WaterJump/WatchRemoteController.m in Sources */ = {isa = PBXBuildFile; fileRef = 9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */; };
 		D9EB0DE920F0B4E90433A993 /* MTJudge/WaterJump/RecordingController.m in Sources */ = {isa = PBXBuildFile; fileRef = 653467DD2BDB984EEE0DC45D /* MTJudge/WaterJump/RecordingController.m */; };
 		E1727CFF3F381B863DF9A165 /* MTJudge/WaterJump/PeerDiscoveryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB05D305E2AAB63DC4A20226 /* MTJudge/WaterJump/PeerDiscoveryManager.swift */; };
@@ -239,6 +240,8 @@
 		CA85EECE2E817E99002BF359 /* TagItemSelectionViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TagItemSelectionViewController.m; sourceTree = "<group>"; };
 		CA85EED02E817EA8002BF359 /* TagItemSelectionViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TagItemSelectionViewController.h; sourceTree = "<group>"; };
 		CAF09A3C2E64626F000CAC92 /* data.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = data.json; sourceTree = "<group>"; };
+		D3E4F5A60000000000000002 /* StrobeFeature.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StrobeFeature.h; sourceTree = "<group>"; };
+		D3E4F5A60000000000000003 /* StrobeFeature.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = StrobeFeature.m; sourceTree = "<group>"; };
 		EB588EE5FDB85BB65F0EBB3F /* MTJudge/WaterJump/WaterJumpSettingsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpSettingsViewController.m; sourceTree = SOURCE_ROOT; };
 		F37A25F8A060C8CA03451779 /* MTJudge/WaterJump/RecordingController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/RecordingController.h; sourceTree = SOURCE_ROOT; };
 		F5488A591BB841A18E19583F /* MTJudge/WaterJump/WaterJumpCoordinator.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpCoordinator.m; sourceTree = SOURCE_ROOT; };
@@ -403,6 +406,8 @@
 				CA537D732E6D2A4C0002A9DA /* TagSelectionViewController.h */,
 				CA537D742E6D2B940002A9DA /* FileSaver.h */,
 				CA537D752E6D2BA10002A9DA /* FileSaver.m */,
+				D3E4F5A60000000000000002 /* StrobeFeature.h */,
+				D3E4F5A60000000000000003 /* StrobeFeature.m */,
 				CA537D772E6D2FEE0002A9DA /* VideoRecordingViewController.h */,
 				CA537D782E6D2FFE0002A9DA /* VideoRecordingViewController.m */,
 			);
@@ -683,6 +688,7 @@
 				0E35987322655BF00093671C /* AirViewController.m in Sources */,
 				0E359844226550C90093671C /* main.m in Sources */,
 				0E35987422655BF00093671C /* DrawingView.m in Sources */,
+				D3E4F5A60000000000000001 /* StrobeFeature.m in Sources */,
 				CA537D792E6D2FFE0002A9DA /* VideoRecordingViewController.m in Sources */,
 				0E35987522655BF00093671C /* JudgeViewController.m in Sources */,
 				0E35987822655BF00093671C /* TouchDrawingView.m in Sources */,
@@ -883,7 +889,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24.7;
+				CURRENT_PROJECT_VERSION = 25.1;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = (
 					PICKER_AIR_DATA_FROM_JSON,
 					"$(inherited)",
@@ -897,7 +903,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.47;
+				MARKETING_VERSION = 5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -914,7 +920,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24.7;
+				CURRENT_PROJECT_VERSION = 25.1;
 				DEVELOPMENT_TEAM = UM9N74S758;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = PICKER_AIR_DATA_FROM_JSON;
 				INFOPLIST_FILE = MTJudge/Info.plist;
@@ -926,7 +932,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.47;
+				MARKETING_VERSION = 5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
