@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import AVFoundation
 import CryptoKit
 
@@ -29,7 +30,8 @@ import CryptoKit
             let fourcc = CMFormatDescriptionGetMediaSubType(format as! CMFormatDescription)
             codec = String(bytes: [UInt8((fourcc >> 24) & 255), UInt8((fourcc >> 16) & 255), UInt8((fourcc >> 8) & 255), UInt8(fourcc & 255)], encoding: .ascii) ?? "unknown"
         }
-        return ["version":1, "id":id, "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
+        let start = UserDefaults.standard.double(forKey: "WJRecordingStartTime")
+        return ["version":1, "id":id, "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "cameraName":UserDefaults.standard.string(forKey:"WJCameraName") ?? UIDevice.current.name, "groupID":UserDefaults.standard.string(forKey:"WJCameraGroupID") ?? "", "recordingStart": start > 0 ? start : Date().timeIntervalSince1970, "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
                 "width":abs(track.naturalSize.width), "height":abs(track.naturalSize.height), "fps":track.nominalFrameRate,
                 "bitrate":track.estimatedDataRate, "codec":codec, "created":Date().timeIntervalSince1970]
     }
@@ -38,6 +40,13 @@ import CryptoKit
               let expected = metadata["sha256"] as? String, expected.count == 64,
               let size = metadata["size"] as? NSNumber, size.int64Value > 0 else { throw failure("受信情報が不正です。") }
         let files = FileManager.default
+        let localGroup = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
+        let incomingGroup = metadata["groupID"] as? String ?? ""
+        // グループ設定済み端末では、別グループの動画を保存領域へ登録しない。
+        // 未設定の旧データは後方互換のため受け入れる。
+        if !localGroup.isEmpty && !incomingGroup.isEmpty && localGroup != incomingGroup {
+            throw failure("別のカメラグループの動画です。転送先グループを確認してください。")
+        }
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
         let requestedName = (metadata["filename"] as? String).flatMap { name -> String? in
             let cleaned = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")

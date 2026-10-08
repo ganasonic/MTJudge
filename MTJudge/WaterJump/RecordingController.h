@@ -5,6 +5,7 @@
 @property (nonatomic, readonly) NSString *state;
 @property (nonatomic, readonly) BOOL busy;
 @property (nonatomic, readonly) BOOL automaticRecording;
+@property (nonatomic, readonly) NSDate *recordingStartDate;
 @property (nonatomic, copy) BOOL (^canStart)(void);
 @property (nonatomic, copy) void (^changed)(void);
 @property (nonatomic, copy) void (^remoteCommand)(NSString *command);

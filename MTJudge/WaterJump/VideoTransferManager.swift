@@ -15,6 +15,7 @@ import Network
     private var channel: TransferChannel?
     private var input: FileHandle?
     private var activeID: String?
+    private var activePeer: String?
     private var activeFilename: String?
     private var relatedInputs: [(url: URL, suffix: String, size: Int64)] = []
     private var relatedIndex = 0
@@ -84,8 +85,13 @@ import Network
         discovery.configure(receiving:receiving, browsing:browsing)
     }
     @objc public func enqueue(_ url: URL, metadata: [String: Any]) {
-        guard let id = metadata["id"] as? String, !jobs.contains(where: { $0["id"] as? String == id }) else { return }
-        jobs.append(["id":id, "file":url.lastPathComponent, "metadata":metadata, "peer":metadata["peer"] as? String ?? discovery.selectedID])
+        guard let id = metadata["id"] as? String else { return }
+        let registered = discovery.registeredPeers.compactMap { $0["id"] }.filter { !$0.isEmpty }
+        let targets = registered.isEmpty ? [metadata["peer"] as? String ?? discovery.selectedID] : registered
+        for peer in targets where !jobs.contains(where: { ($0["id"] as? String) == id && ($0["peer"] as? String ?? "") == peer }) {
+            jobs.append(["id":id, "file":url.lastPathComponent, "metadata":metadata, "peer":peer])
+        }
+        guard !targets.isEmpty else { return }
         guard persist() else { return }; state = "WAITING_TRANSFER"; message = "転送待ち \(jobs.count)本"; changed?(); pump()
     }
     @objc public func retry() { pump() }
@@ -98,7 +104,9 @@ import Network
         info["transferRequested"] = true
         info["transferComplete"] = false
         jobs.removeAll { ($0["id"] as? String) == id }
-        jobs.append(["id": id, "file": url.lastPathComponent, "metadata": info, "peer": info["peer"] as? String ?? discovery.selectedID])
+        let registered = discovery.registeredPeers.compactMap { $0["id"] }.filter { !$0.isEmpty }
+        let targets = registered.isEmpty ? [info["peer"] as? String ?? discovery.selectedID] : registered
+        for peer in targets { jobs.append(["id": id, "file": url.lastPathComponent, "metadata": info, "peer": peer]) }
         _ = persist()
         state = "WAITING_TRANSFER"; message = "再転送待ち"; changed?(); pump()
     }
@@ -133,6 +141,7 @@ import Network
             state = "TRANSFER_FAILED"; message = "転送元動画が見つかりません。保存動画一覧から再送してください。"; changed?(); return
         }
         activeFilename = url.lastPathComponent
+        activePeer = peer
         // Bind an initially unregistered job once; later destination changes never reroute it.
         if (jobs[0]["peer"] as? String ?? "").isEmpty {
             jobs[0]["peer"] = peer
@@ -217,9 +226,14 @@ import Network
     private func finish(_ id: String, error: Error?) {
         channel?.close(); channel = nil; try? input?.close(); input = nil; try? relatedHandle?.close(); relatedHandle = nil; relatedInputs.removeAll(); relatedIndex = 0; activeFilename = nil
         DispatchQueue.main.async {
-            guard self.activeID == id else { return }; self.activeID = nil
+            guard self.activeID == id else { return }
             if let error = error { self.state = "TRANSFER_FAILED"; self.message = "転送失敗: \(error.localizedDescription) 元動画は保存済みです。" }
-            else { self.jobs.removeAll { $0["id"] as? String == id }; self.state = "TRANSFERRED"; self.message = "転送完了"; self.progress = 1 }
+            else {
+                let destination = self.activePeer ?? ""
+                self.jobs.removeAll { ($0["id"] as? String) == id && ($0["peer"] as? String ?? "") == destination }
+                self.state = self.jobs.isEmpty ? "TRANSFERRED" : "WAITING_TRANSFER"; self.message = self.jobs.isEmpty ? "転送完了" : "次の受信端末へ転送待ち"; self.progress = 1
+            }
+            self.activeID = nil; self.activePeer = nil
             _ = self.persist(); self.changed?(); if error == nil { self.pump() }
         }
     }

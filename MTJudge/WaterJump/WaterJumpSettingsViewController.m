@@ -27,6 +27,7 @@ static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) NSArray<NSURL *> *videos;
 @property (nonatomic, strong) NSURL *selectedMainURL;
 @property (nonatomic, strong) NSURL *selectedSubURL;
+@property (nonatomic, assign) BOOL gridMode;
 @end
 static UIImage *WJQRCodeImage(NSString *value) {
     if (!value.length) return nil;
@@ -208,8 +209,11 @@ static UIImage *WJQRCodeImage(NSString *value) {
     self.completed = YES;
     self.valueField.text = value ?: @"";
     [self.captureSession stopRunning];
-    if (self.completion) self.completion(value ?: @"");
-    [self dismissViewControllerAnimated:YES completion:nil];
+    void (^completion)(NSString *) = [self.completion copy];
+    NSString *result = [value copy] ?: @"";
+    [self dismissViewControllerAnimated:YES completion:^{
+        if (completion) completion(result);
+    }];
 }
 - (void)cancelScan {
     self.completed = YES;
@@ -222,8 +226,12 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"練習動画";
+    self.gridMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJVideoGridMode"];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
+    UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
+    UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
+    grid.accessibilityLabel = @"リスト表示とサムネイル表示を切り替え";
+    self.navigationItem.rightBarButtonItems = @[photo, grid];
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectComparisonVideo:)];
     longPress.minimumPressDuration = .55;
     longPress.cancelsTouchesInView = YES;
@@ -244,10 +252,17 @@ static UIImage *WJQRCodeImage(NSString *value) {
     delete.tintColor = UIColor.systemRedColor;
     self.navigationItem.rightBarButtonItems = @[delete, transfer, share];
 }
+- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
+    // 行左端の赤い削除記号は使わず、選択状態はチェックマークで示す。
+    return UITableViewCellEditingStyleNone;
+}
 - (void)endMultiSelect {
     self.editing = NO;
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
-    self.navigationItem.rightBarButtonItems = @[[[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)]];
+    UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
+    UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
+    grid.accessibilityLabel = @"リスト表示とサムネイル表示を切り替え";
+    self.navigationItem.rightBarButtonItems = @[photo, grid];
 }
 - (NSArray<NSURL *> *)selectedVideoURLs {
     NSMutableArray *urls = [NSMutableArray array];
@@ -282,6 +297,18 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self refreshVideos]; }
 - (void)refreshVideos { if (@available(iOS 13.0, *)) { self.videos = [ReceivedVideoManager videos]; [self.tableView reloadData]; } }
+- (void)toggleGridMode {
+    self.gridMode = !self.gridMode;
+    [[NSUserDefaults standardUserDefaults] setBool:self.gridMode forKey:@"WJVideoGridMode"];
+    UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
+    UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
+    grid.accessibilityLabel = @"リスト表示とサムネイル表示を切り替え";
+    self.navigationItem.rightBarButtonItems = @[photo, grid];
+    [self.tableView reloadData];
+}
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return self.gridMode ? 220.0 : UITableViewAutomaticDimension;
+}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.videos.count; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
@@ -302,9 +329,13 @@ static UIImage *WJQRCodeImage(NSString *value) {
     cell.detailTextLabel.numberOfLines = 0;
     AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:[AVAsset assetWithURL:url]];
     generator.appliesPreferredTrackTransform = YES;
-    generator.maximumSize = CGSizeMake(160, 100);
+    generator.maximumSize = self.gridMode ? CGSizeMake(420, 240) : CGSizeMake(160, 100);
     CGImageRef imageRef = [generator copyCGImageAtTime:kCMTimeZero actualTime:NULL error:nil];
-    if (imageRef) { cell.imageView.image = [UIImage imageWithCGImage:imageRef]; CGImageRelease(imageRef); }
+    if (imageRef) {
+        cell.imageView.image = [UIImage imageWithCGImage:imageRef];
+        if (self.gridMode) cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        CGImageRelease(imageRef);
+    }
     UIButton *retransferButton = [UIButton buttonWithType:UIButtonTypeSystem];
     retransferButton.tag = indexPath.row;
     retransferButton.accessibilityIdentifier = url.path;
@@ -339,6 +370,12 @@ static UIImage *WJQRCodeImage(NSString *value) {
     UIStackView *actions = [[UIStackView alloc] initWithArrangedSubviews:@[retransferButton, shareButton, favoriteButton, deleteButton]];
     actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 2; actions.frame = CGRectMake(0, 0, 168, 44);
     cell.accessoryView = actions;
+    if (self.editing) {
+        BOOL selected = [self.tableView.indexPathsForSelectedRows containsObject:indexPath];
+        cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    } else {
+        cell.accessoryType = UITableViewCellAccessoryNone;
+    }
     return cell;
 }
 - (void)selectComparisonVideo:(UILongPressGestureRecognizer *)gesture {
@@ -361,10 +398,19 @@ static UIImage *WJQRCodeImage(NSString *value) {
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     // 複数選択モードでは行タップは選択／解除だけにし、動画を再生しない。
-    if (self.editing) return;
+    if (self.editing) {
+        UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+        cell.accessoryType = UITableViewCellAccessoryCheckmark;
+        return;
+    }
     WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:self.videos[indexPath.row]];
     [player setPlaylist:self.videos currentIndex:indexPath.row];
     [self presentViewController:player animated:YES completion:^{ [player.player play]; }];
+}
+- (void)tableView:(UITableView *)tableView didDeselectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (!self.editing) return;
+    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+    cell.accessoryType = UITableViewCellAccessoryNone;
 }
 - (void)deleteVideo:(UIButton *)sender {
     NSURL *url = sender.accessibilityIdentifier.length ? [NSURL fileURLWithPath:sender.accessibilityIdentifier] : nil;
@@ -445,14 +491,14 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)refresh { [self.tableView reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 11;
-    if (section == 1) return 6;
+    if (section == 0) return 13;
+    if (section == 1) return 9;
     if (section == 2) return 1;
     return [WaterJumpCoordinator shared].discoveredPeers.count;
 }
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section { return @[@"録画・受信設定", @"接続情報", @"動画", @"検出した受信端末（選択して登録）"][section]; }
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section { return @[@"録画・受信設定", @"接続情報", @"動画", @"検出したカメラグループ／受信端末（選択して参加）"][section]; }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if (section == 0) return @"通常録画は従来通りダウンロードへ保存します。ウォータージャンプ録画と受信動画はDocuments/Recordingsへ自動保存します。撮影と受信は別の端末で行ってください。";
+    if (section == 0) return @"録画・受信した動画はMTJudge/Recordingsへ保存されます。撮影と受信は別の端末でも使用できます。";
     if (section == 1) return @"同じWi-Fiで両端末を前景起動してください。接続URL・登録コードは操作を許可する相手だけに渡してください。URLはRemote Cameraの再起動で変わります。";
     return nil;
 }
@@ -461,7 +507,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     cell.textLabel.numberOfLines = 0; cell.detailTextLabel.numberOfLines = 0;
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
     if (indexPath.section == 0) {
-        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"リモートカメラ1を使う", @"ループ再生設定"];
+        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"リモートカメラ1を使う", @"ループ再生設定", @"カメラ名", @"リモートカメラ2を使う"];
         cell.textLabel.text = names[indexPath.row];
         if (indexPath.row == 3) { cell.accessibilityIdentifier = @"WJDuration"; NSInteger duration = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJDuration"]; cell.detailTextLabel.text = duration > 0 ? [NSString stringWithFormat:@"%ld秒", (long)duration] : @"ー（手動停止）"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
         else if (indexPath.row == 10) {
@@ -471,8 +517,19 @@ static UIImage *WJQRCodeImage(NSString *value) {
             NSString *timeText = count < 0 ? (seconds > 0 ? [NSString stringWithFormat:@"%ld分", (long)(seconds / 60)] : @"時間制限なし") : @"";
             cell.detailTextLabel.text = timeText.length ? [NSString stringWithFormat:@"%@・%@", countText, timeText] : countText;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else if (indexPath.row == 11) {
+            NSString *name = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraName"];
+            cell.detailTextLabel.text = name.length ? name : UIDevice.currentDevice.name;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else {
-            NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback",@"WJUseSubCamera"];
+            NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback",@"WJUseSubCamera",@"WJLoopPlayback",@"WJCameraName",@"WJUseSubCamera2"];
+            if (indexPath.row == 12) {
+                UISwitch *toggle = [UISwitch new]; toggle.tag = indexPath.row; toggle.accessibilityIdentifier = keys[indexPath.row];
+                toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:keys[indexPath.row]];
+                toggle.enabled = !manager.recordingBusy && [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCamera2URL"].length > 0 && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera"];
+                [toggle addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
+                return cell;
+            }
             UISwitch *toggle = [UISwitch new]; toggle.tag = indexPath.row;
             toggle.accessibilityIdentifier = keys[indexPath.row];
             toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:keys[indexPath.row]];
@@ -483,14 +540,42 @@ static UIImage *WJQRCodeImage(NSString *value) {
             [toggle addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
     } else if (indexPath.section == 1) {
-        NSArray *titles = @[@"状態", @"WebリモコンURL（タップでQR表示）", @"この端末の登録コード（タップでQR表示）", @"転送先", @"転送先URL登録", @"リモートカメラ1登録"];
+        NSArray *titles = @[@"状態", @"WebリモコンURL（タップでQR表示）", @"この端末の登録コード（タップでQR表示）", @"転送先", @"転送先URL登録", @"リモートカメラ1登録", @"リモートカメラ2登録", @"カメラグループ", @"同じWi-Fiのカメラグループを探す"];
         cell.textLabel.text = titles[indexPath.row];
         if (indexPath.row == 0) cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\n%@", manager.status[@"state"], manager.status[@"message"]];
         if (indexPath.row == 1) cell.detailTextLabel.text = manager.remoteAddress.length ? manager.remoteAddress : @"Remote CameraをONにしてください";
         if (indexPath.row == 2) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] ? manager.pairingCode : @"受信端末で受信待機をONにしてください";
-        if (indexPath.row == 3) cell.detailTextLabel.text = manager.peerDescription;
+        if (indexPath.row == 3) {
+            NSArray *registered = manager.registeredPeers;
+            if (registered.count) {
+                NSMutableArray *labels = [NSMutableArray array];
+                for (NSDictionary *peer in registered) [labels addObject:[NSString stringWithFormat:@"%@%@", peer[@"name"] ?: @"端末", [peer[@"id"] isEqual:([[NSUserDefaults standardUserDefaults] stringForKey:@"WJPeerID"] ?: @"")] ? @"（選択中）" : @""]];
+                cell.detailTextLabel.text = [labels componentsJoinedByString:@"\n"];
+            } else cell.detailTextLabel.text = manager.peerDescription;
+        }
         if (indexPath.row == 5) cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"] ?: @"未登録（リモートカメラ1のRemote Camera URLを入力）";
-        if (indexPath.row == 1 || indexPath.row == 2 || indexPath.row == 4 || indexPath.row == 5) {
+        if (indexPath.row == 6) {
+            cell.detailTextLabel.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCamera2URL"] ?: @"未登録";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
+        if (indexPath.row == 7) {
+            NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+            NSString *name = [defaults stringForKey:@"WJCameraGroupName"];
+            NSString *groupID = [defaults stringForKey:@"WJCameraGroupID"];
+            cell.detailTextLabel.text = name.length && groupID.length ? [NSString stringWithFormat:@"%@\n%@", name, groupID] : @"未設定（タップして作成）";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
+        if (indexPath.row == 8) {
+            NSArray *peers = manager.discoveredPeers;
+            NSMutableArray *groups = [NSMutableArray array];
+            for (NSDictionary *peer in peers) {
+                NSString *label = peer[@"groupName"] ?: peer[@"groupID"];
+                if (label.length && ![groups containsObject:label]) [groups addObject:label];
+            }
+            cell.detailTextLabel.text = groups.count ? [groups componentsJoinedByString:@"、"] : @"検出中…（同じWi-Fi・受信待機を確認）";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
+        if (indexPath.row == 1 || indexPath.row == 2 || indexPath.row == 4 || indexPath.row == 5 || indexPath.row == 6) {
             UIButton *qr = [UIButton buttonWithType:UIButtonTypeSystem];
             [qr setImage:[UIImage systemImageNamed:@"qrcode"] forState:UIControlStateNormal];
             qr.tintColor = UIColor.secondaryLabelColor; qr.frame = CGRectMake(0, 0, 36, 36); qr.accessibilityLabel = @"QRコードを読み取る"; qr.tag = indexPath.row;
@@ -500,12 +585,16 @@ static UIImage *WJQRCodeImage(NSString *value) {
     } else if (indexPath.section == 2) {
         cell.textLabel.text = @"転送を再送"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else {
-        NSDictionary *peer = manager.discoveredPeers[indexPath.row]; cell.textLabel.text = peer[@"name"]; cell.detailTextLabel.text = peer[@"id"]; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        NSDictionary *peer = manager.discoveredPeers[indexPath.row];
+        NSString *group = peer[@"groupName"] ?: peer[@"groupID"];
+        cell.textLabel.text = group.length ? [NSString stringWithFormat:@"%@（%@）", group, peer[@"name"] ?: @"端末"] : (peer[@"name"] ?: @"端末");
+        cell.detailTextLabel.text = group.length ? [NSString stringWithFormat:@"%@\n%@", peer[@"role"] ?: @"受信端末", peer[@"id"] ?: @""] : peer[@"id"];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     }
     return cell;
 }
 - (void)toggle:(UISwitch *)sender {
-    NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback",@"WJUseSubCamera"];
+    NSArray *keys = @[@"WJMode",@"WJWeb",@"WJWatch",@"WJDuration",@"WJTransfer",@"WJReceive",@"WJTagBeforeTransfer",@"WJAutoPlayAfterTransfer",@"WJLoopPlayback",@"WJUseSubCamera",@"WJLoopPlayback",@"WJCameraName",@"WJUseSubCamera2"];
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults setBool:sender.on forKey:keys[sender.tag]];
     if (sender.tag == 6 && sender.on && (![defaults boolForKey:@"WJMode"] || ![defaults boolForKey:@"WJTransfer"])) [defaults setBool:NO forKey:@"WJTagBeforeTransfer"];
@@ -522,7 +611,14 @@ static UIImage *WJQRCodeImage(NSString *value) {
     imageView.translatesAutoresizingMaskIntoConstraints = NO;
     imageView.contentMode = UIViewContentModeScaleAspectFit;
     [alert.view addSubview:imageView];
-    [NSLayoutConstraint activateConstraints:@[[imageView.centerXAnchor constraintEqualToAnchor:alert.view.centerXAnchor], [imageView.bottomAnchor constraintEqualToAnchor:alert.view.bottomAnchor constant:-52], [imageView.widthAnchor constraintEqualToConstant:220], [imageView.heightAnchor constraintEqualToConstant:220]]];
+    // UIAlertControllerのアクション領域と重ならないよう、画像を独立した領域に配置する。
+    [NSLayoutConstraint activateConstraints:@[
+        [imageView.centerXAnchor constraintEqualToAnchor:alert.view.centerXAnchor],
+        [imageView.topAnchor constraintEqualToAnchor:alert.view.topAnchor constant:112],
+        [imageView.widthAnchor constraintEqualToConstant:260],
+        [imageView.heightAnchor constraintEqualToConstant:260],
+        [alert.view.heightAnchor constraintGreaterThanOrEqualToConstant:430]
+    ]];
     [alert addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -536,19 +632,39 @@ static UIImage *WJQRCodeImage(NSString *value) {
             UIAlertController *error = [UIAlertController alertControllerWithTitle:@"登録できません" message:@"選択した端末の登録コードを確認してください。" preferredStyle:UIAlertControllerStyleAlert];
             [error addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:error animated:YES completion:nil];
+        } else {
+            // QR登録が成功したら、検出情報にGroup IDが欠けていても必ず役割を選択させる。
+            NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+            NSString *groupID = peer[@"groupID"];
+            NSString *groupName = peer[@"groupName"] ?: peer[@"name"];
+            if (groupID.length) [defaults setObject:groupID forKey:@"WJCameraGroupID"];
+            if (groupName.length) [defaults setObject:groupName forKey:@"WJCameraGroupName"];
+            UIAlertController *role = [UIAlertController alertControllerWithTitle:@"カメラ役割" message:@"この端末の役割を選択してください。" preferredStyle:UIAlertControllerStyleActionSheet];
+            for (NSDictionary *choice in @[@{@"title":@"カメラ1", @"role":@"MAIN_CAMERA"}, @{@"title":@"カメラ2", @"role":@"SUB_CAMERA"}, @{@"title":@"カメラ3", @"role":@"SUB_CAMERA"}]) {
+                [role addAction:[UIAlertAction actionWithTitle:choice[@"title"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    [defaults setObject:choice[@"role"] forKey:@"WJCameraRole"];
+                    [[WaterJumpCoordinator shared] applySettings];
+                    [self refresh];
+                }]];
+            }
+            [role addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:role animated:YES completion:nil];
         }
     };
     scanner.modalPresentationStyle = UIModalPresentationFormSheet;
     [self presentViewController:scanner animated:YES completion:nil];
 }
 - (void)presentSubCameraScanner {
+    [self presentSubCameraScannerForKey:@"WJSubCameraURL" title:@"リモートカメラ1登録"];
+}
+- (void)presentSubCameraScannerForKey:(NSString *)defaultsKey title:(NSString *)title {
     WJQRScannerViewController *scanner = [WJQRScannerViewController new];
-    scanner.screenTitle = @"リモートカメラ1登録";
-    scanner.initialValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"];
+    scanner.screenTitle = title;
+    scanner.initialValue = [[NSUserDefaults standardUserDefaults] stringForKey:defaultsKey];
     scanner.completion = ^(NSString *value) {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-        if (value.length) [defaults setObject:value forKey:@"WJSubCameraURL"];
-        else [defaults removeObjectForKey:@"WJSubCameraURL"];
+        if (value.length) [defaults setObject:value forKey:defaultsKey];
+        else [defaults removeObjectForKey:defaultsKey];
         [self refresh];
     };
     scanner.modalPresentationStyle = UIModalPresentationFormSheet;
@@ -560,6 +676,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     else if (sender.tag == 2 && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) { UIPasteboard.generalPasteboard.string = manager.pairingCode; [self showQRCodeForValue:manager.pairingCode title:@"この端末の登録コード"]; }
     else if (sender.tag == 4) [self presentPeerScanner:nil];
     else if (sender.tag == 5) [self presentSubCameraScanner];
+    else if (sender.tag == 6) [self presentSubCameraScannerForKey:@"WJSubCamera2URL" title:@"リモートカメラ2登録"];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -591,6 +708,57 @@ static UIImage *WJQRCodeImage(NSString *value) {
         [countAlert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:countAlert animated:YES completion:nil];
     }
+    if (indexPath.section == 0 && indexPath.row == 11 && !manager.recordingBusy) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"カメラ名" message:@"動画情報と端末間転送のメタデータに使用します。" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+            field.placeholder = UIDevice.currentDevice.name;
+            field.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraName"];
+            field.clearButtonMode = UITextFieldViewModeWhileEditing;
+        }];
+        [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *name = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (name.length) [[NSUserDefaults standardUserDefaults] setObject:name forKey:@"WJCameraName"];
+            else [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WJCameraName"];
+            [self refresh];
+        }]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+    if (indexPath.section == 1 && indexPath.row == 7) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"カメラグループ" message:@"同じグループIDの端末だけが録画・転送対象になります。空欄でグループ設定を解除します。" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+            field.placeholder = @"例：Aグループ";
+            field.text = [defaults stringForKey:@"WJCameraGroupName"];
+        }];
+        [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *name = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (!name.length) {
+                [defaults removeObjectForKey:@"WJCameraGroupName"];
+                [defaults removeObjectForKey:@"WJCameraGroupID"];
+            } else {
+                [defaults setObject:name forKey:@"WJCameraGroupName"];
+                if (![defaults stringForKey:@"WJCameraGroupID"].length) [defaults setObject:NSUUID.UUID.UUIDString forKey:@"WJCameraGroupID"];
+            }
+            [[WaterJumpCoordinator shared] applySettings];
+            [self refresh];
+        }]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+    if (indexPath.section == 1 && indexPath.row == 8) {
+        NSArray *peers = manager.discoveredPeers;
+        UIAlertController *groups = [UIAlertController alertControllerWithTitle:@"カメラグループを選択" message:@"同じWi-Fi上で検出されたグループです。選択すると登録コードの読み取りへ進みます。" preferredStyle:UIAlertControllerStyleActionSheet];
+        for (NSDictionary *peer in peers) {
+            NSString *group = peer[@"groupName"] ?: peer[@"groupID"];
+            if (!group.length) continue;
+            NSString *title = [NSString stringWithFormat:@"%@（%@）", group, peer[@"name"] ?: @"端末"];
+            [groups addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [self presentPeerScanner:peer]; }]];
+        }
+        if (!groups.actions.count) [groups addAction:[UIAlertAction actionWithTitle:@"検出されていません" style:UIAlertActionStyleDefault handler:nil]];
+        [groups addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:groups animated:YES completion:nil];
+    }
     if (indexPath.section == 1 && indexPath.row == 1 && manager.remoteAddress.length) { UIPasteboard.generalPasteboard.string = manager.remoteAddress; [self showQRCodeForValue:manager.remoteAddress title:@"WebリモコンURL"]; }
     if (indexPath.section == 1 && indexPath.row == 2 && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) { UIPasteboard.generalPasteboard.string = manager.pairingCode; [self showQRCodeForValue:manager.pairingCode title:@"この端末の登録コード"]; }
     if (indexPath.section == 2 && indexPath.row == 0) [manager retryTransfer];
@@ -600,6 +768,9 @@ static UIImage *WJQRCodeImage(NSString *value) {
     }
     if (indexPath.section == 1 && indexPath.row == 5) {
         [self presentSubCameraScanner];
+    }
+    if (indexPath.section == 1 && indexPath.row == 6) {
+        [self presentSubCameraScannerForKey:@"WJSubCamera2URL" title:@"リモートカメラ2登録"];
     }
 }
 @end

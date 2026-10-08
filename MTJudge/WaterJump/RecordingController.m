@@ -9,6 +9,7 @@
 @property (nonatomic, strong) AVAudioPlayer *cuePlayer;
 @property (nonatomic, readwrite) NSString *state;
 @property (nonatomic, readwrite) BOOL automaticRecording;
+@property (nonatomic, strong, readwrite) NSDate *recordingStartDate;
 @end
 @implementation RecordingController
 - (NSData *)toneData:(double)frequency duration:(double)duration {
@@ -80,6 +81,8 @@
         }
     }
     self.state = @"RECORDING";
+    self.recordingStartDate = [NSDate date];
+    [[NSUserDefaults standardUserDefaults] setDouble:self.recordingStartDate.timeIntervalSince1970 forKey:@"WJRecordingStartTime"];
     [self.recorder startRecording];
     if (self.remoteCommand) self.remoteCommand(@"START");
     // 既存の本体録画と同じ開始音。リモコン開始でも撮影端末側で鳴らす。

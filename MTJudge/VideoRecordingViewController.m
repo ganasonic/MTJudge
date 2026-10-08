@@ -280,11 +280,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [[NSFileManager defaultManager] createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&storageError];
         NSURL *localURL = [directory URLByAppendingPathComponent:outputFileURL.lastPathComponent];
         if (!storageError && [[NSFileManager defaultManager] moveItemAtURL:outputFileURL toURL:localURL error:&storageError]) {
-            NSURL *previousURL = self.latestRecordingURL;
             [[NSUserDefaults standardUserDefaults] setObject:localURL.path forKey:@"LatestCameraRecordingPath"];
-            if (previousURL && [previousURL.URLByDeletingLastPathComponent isEqual:directory] && ![previousURL isEqual:localURL]) {
-                [[NSFileManager defaultManager] removeItemAtURL:previousURL error:NULL];
-            }
+            // 既存の録画を削除せず、保存動画一覧から参照できる状態を維持する。
         } else {
             localURL = outputFileURL;
             NSLog(@"Could not retain recording: %@", storageError);

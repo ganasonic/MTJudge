@@ -33,10 +33,19 @@ import UIKit
     @objc public var selectedName: String { UserDefaults.standard.string(forKey: "WJPeerName") ?? "未登録" }
     @objc public var selectedID: String { UserDefaults.standard.string(forKey: "WJPeerID") ?? "" }
     @objc public var peerAvailable: Bool { endpoints[selectedID] != nil }
+    @objc public var registeredPeers: [[String: String]] {
+        (UserDefaults.standard.array(forKey: "WJPeerRegistrations") as? [[String: String]]) ?? []
+    }
     @objc public func registerPeer(_ name: String, code: String) -> Bool {
         let parts = code.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2, UUID(uuidString: parts[0]) != nil, parts[0] != deviceID,
               Data(base64Encoded: parts[1])?.count == 32, Self.store(parts[1], "sender-" + parts[0]) else { return false }
+        var registrations = registeredPeers
+        registrations.removeAll { $0["id"] == parts[0] }
+        registrations.append(["id": parts[0], "name": name])
+        if registrations.count > 3 { registrations = Array(registrations.suffix(3)) }
+        UserDefaults.standard.set(registrations, forKey: "WJPeerRegistrations")
+        // 既存の単一転送先設定は保持し、最後に登録した端末を選択先にする。
         UserDefaults.standard.set(parts[0], forKey: "WJPeerID")
         UserDefaults.standard.set(name, forKey: "WJPeerName")
         changed?(); return true
@@ -51,8 +60,25 @@ import UIKit
                 for result in results {
                     guard case .service(let name, _, _, _) = result.endpoint,
                           let id = name.split(separator: "~").last.map(String.init), UUID(uuidString: id) != nil, id != self.deviceID else { continue }
+                    let parts = name.split(separator: "~").map(String.init)
+                    // 新形式: groupToken~roleCode~groupName~deviceID（短いBonjour名）
+                    // 旧形式: deviceName~groupID~role~groupName~deviceID
+                    let shortFormat = parts.count == 4 && UUID(uuidString: parts.last ?? "") != nil
+                    let advertisedGroup = shortFormat ? parts[0] : (parts.count >= 4 ? parts[1] : "")
+                    let localGroup = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
+                    let localToken = localGroup.count > 12 ? String(localGroup.prefix(8)) : localGroup
+                    if !localToken.isEmpty && !advertisedGroup.isEmpty && localToken != advertisedGroup { continue }
                     self.endpoints[id] = result.endpoint
-                    self.peers.append(["id": id, "name": String(name.split(separator: "~").first ?? "MTJudge")])
+                    var peer: [String: String] = ["id": id, "name": shortFormat ? (parts[2].isEmpty ? "MTJudge" : parts[2]) : (parts.first ?? "MTJudge")]
+                    if advertisedGroup.count > 0 { peer["groupID"] = advertisedGroup }
+                    if shortFormat {
+                        peer["role"] = parts[1] == "S" ? "SUB_CAMERA" : "MAIN_CAMERA"
+                        peer["groupName"] = parts[2]
+                    } else {
+                        if parts.count >= 4 { peer["role"] = parts[2] }
+                        if parts.count >= 5 { peer["groupName"] = parts[3] }
+                    }
+                    self.peers.append(peer)
                 }
                 self.peers.sort { ($0["name"] ?? "") < ($1["name"] ?? "") }; self.changed?()
             }
@@ -62,7 +88,12 @@ import UIKit
             }
             browser.start(queue: .main)
         } else if !browsing { browser?.cancel(); browser = nil; endpoints.removeAll(); peers.removeAll() }
-        if receiving && listener == nil {
+        // グループ参加端末を検出できるよう、受信待機がOFFでも
+        // グループ設定済み端末はBonjour広告だけ開始する。
+        // 実際の受信は self.receiving == true の場合だけ accepted で処理する。
+        let configuredGroup = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
+        let shouldAdvertise = receiving || !configuredGroup.isEmpty
+        if shouldAdvertise && listener == nil {
             let code = pairingCode.components(separatedBy: ":")
             guard code.count == 2, let params = Self.parameters(code[1]) else { message = "ペアリング鍵を作成できません"; changed?(); return }
             do {
@@ -73,7 +104,14 @@ import UIKit
                 #else
                 let deviceName = ProcessInfo.processInfo.hostName
                 #endif
-                let name = String(deviceName.prefix(12)).replacingOccurrences(of: "~", with: "-") + "~" + deviceID
+                var group = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
+                if group.count > 12 { group = String(group.prefix(8)); UserDefaults.standard.set(group, forKey: "WJCameraGroupID") }
+                let groupName = UserDefaults.standard.string(forKey: "WJCameraGroupName") ?? ""
+                let role = UserDefaults.standard.string(forKey: "WJCameraRole") ?? "MAIN_CAMERA"
+                let safeGroup = group.replacingOccurrences(of: "~", with: "-")
+                let safeGroupName = groupName.replacingOccurrences(of: "~", with: "-")
+                let roleCode = role == "SUB_CAMERA" ? "S" : "M"
+                let name = safeGroup.isEmpty ? (String(deviceName.prefix(8)) + "~" + deviceID) : (safeGroup + "~" + roleCode + "~" + String(safeGroupName.prefix(12)) + "~" + deviceID)
                 listener.service = NWListener.Service(name: name, type: "_mtjudge-wj._tcp")
                 listener.newConnectionHandler = { [weak self] connection in
                     guard let accepted = self?.accepted else { connection.cancel(); return }; accepted(connection)

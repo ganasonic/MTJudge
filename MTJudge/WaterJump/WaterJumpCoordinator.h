@@ -11,6 +11,7 @@ extern NSString * const WJStatusChanged;
 @property (nonatomic, readonly) NSString *pairingCode;
 @property (nonatomic, readonly) NSString *peerDescription;
 @property (nonatomic, readonly) NSArray<NSDictionary *> *discoveredPeers;
+@property (nonatomic, readonly) NSArray<NSDictionary *> *registeredPeers;
 - (BOOL)registerPeer:(NSString *)name code:(NSString *)code;
 - (void)retryTransfer;
 - (void)retransferVideoURL:(NSURL *)url;

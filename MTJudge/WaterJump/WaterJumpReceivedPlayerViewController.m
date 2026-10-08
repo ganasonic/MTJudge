@@ -244,6 +244,12 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if (![self.tool isEqualToString:@"軌道"]) [_activePoints removeAllObjects];
     [self setNeedsDisplay];
 }
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    // システムジェスチャーや画面遷移でキャンセルされた入力は確定しない。
+    // 前回のプレビュー点を残すと、次の軸3D描画に混入して消失するため破棄する。
+    [_activePoints removeAllObjects];
+    [self setNeedsDisplay];
+}
 @end
 
 @interface WaterJumpReceivedPlayerViewController () <UIColorPickerViewControllerDelegate>
@@ -270,6 +276,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, assign) CMTime loopStartTime;
 @property (nonatomic, assign) CMTime loopEndTime;
 @property (nonatomic, assign) BOOL loopEnabled;
+@property (nonatomic, assign) BOOL loopSeekInProgress;
 @property (nonatomic, assign) BOOL mirroredPlayback;
 @property (nonatomic, strong) id playbackTimeObserver;
 @property (nonatomic, assign) NSInteger automaticLoopLimit;
@@ -284,6 +291,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UIButton *skeletonButton;
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UIButton *infoButton;
 @property (nonatomic, strong) UIButton *shareButton;
 @property (nonatomic, strong) UIButton *exportButton;
 @property (nonatomic, strong) UIButton *favoriteButton;
@@ -305,6 +313,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UIButton *drawingButton;
 @property (nonatomic, strong) WJDrawingCanvas *drawingCanvas;
 @property (nonatomic, strong) UIView *drawingPalette;
+@property (nonatomic, strong) UIView *drawingTextPalette;
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *drawingAnnotations;
 @property (nonatomic, assign) BOOL drawingMode;
 @property (nonatomic, assign) CMTime drawingModeStartTime;
@@ -417,9 +426,10 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
             [weakSelf updateAnalysisForTime:time];
             [weakSelf updateDrawingCanvasForTime:time];
             if (weakSelf.loopEnabled && CMTIME_IS_VALID(weakSelf.loopStartTime) && CMTIME_IS_VALID(weakSelf.loopEndTime) && CMTimeCompare(weakSelf.loopEndTime, weakSelf.loopStartTime) > 0) {
-                if (CMTimeCompare(time, weakSelf.loopEndTime) >= 0) {
+                if (!weakSelf.loopSeekInProgress && CMTimeCompare(time, weakSelf.loopEndTime) >= 0) {
                     AVPlayer *player = weakSelf.player; weakSelf.loopEnabled = NO;
-                    [player seekToTime:weakSelf.loopStartTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) { dispatch_async(dispatch_get_main_queue(), ^{ if (finished && weakSelf.player == player) { weakSelf.loopEnabled = YES; player.rate = weakSelf.wjSelectedSpeed; } }); }];
+                    weakSelf.loopSeekInProgress = YES;
+                    [player seekToTime:weakSelf.loopStartTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) { dispatch_async(dispatch_get_main_queue(), ^{ weakSelf.loopSeekInProgress = NO; if (finished && weakSelf.player == player) { weakSelf.loopEnabled = YES; player.rate = weakSelf.wjSelectedSpeed; } }); }];
                 }
                 return;
             }
@@ -427,10 +437,11 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
             if (weakSelf.loopEnabled && (!CMTIME_IS_VALID(weakSelf.loopStartTime) || !CMTIME_IS_VALID(weakSelf.loopEndTime))) {
                 double duration = CMTimeGetSeconds(weakSelf.player.currentItem.duration);
                 double current = CMTimeGetSeconds(time);
-                if (isfinite(duration) && duration > 0 && isfinite(current) && current >= duration - 0.08) {
+                if (!weakSelf.loopSeekInProgress && isfinite(duration) && duration > 0 && isfinite(current) && current >= duration - 0.08) {
                     AVPlayer *player = weakSelf.player;
+                    weakSelf.loopSeekInProgress = YES;
                     [player seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
-                        if (finished && weakSelf.player == player) dispatch_async(dispatch_get_main_queue(), ^{ player.rate = weakSelf.wjSelectedSpeed; });
+                        dispatch_async(dispatch_get_main_queue(), ^{ weakSelf.loopSeekInProgress = NO; if (finished && weakSelf.player == player) player.rate = weakSelf.wjSelectedSpeed; });
                     }];
                 }
                 return;
@@ -465,9 +476,11 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)playerDidReachEnd:(NSNotification *)notification {
     if (notification.object != self.player.currentItem) return;
     if (self.loopEnabled) {
+        if (self.loopSeekInProgress) return;
+        self.loopSeekInProgress = YES;
         CMTime target = (CMTIME_IS_VALID(self.loopStartTime) && CMTIME_IS_VALID(self.loopEndTime) && CMTimeCompare(self.loopEndTime, self.loopStartTime) > 0) ? self.loopStartTime : kCMTimeZero;
         [self.player seekToTime:target toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
-            if (finished) dispatch_async(dispatch_get_main_queue(), ^{ self.player.rate = self.wjSelectedSpeed; });
+            dispatch_async(dispatch_get_main_queue(), ^{ self.loopSeekInProgress = NO; if (finished) self.player.rate = self.wjSelectedSpeed; });
         }];
         return;
     }
@@ -744,6 +757,16 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.closeButton.widthAnchor constraintEqualToConstant:38],
         [self.closeButton.heightAnchor constraintEqualToConstant:36]
     ]];
+    self.infoButton = [self featureButtonWithSymbol:@"info.circle" action:@selector(showVideoInfo:) label:@"動画情報"];
+    self.infoButton.tintColor = UIColor.whiteColor;
+    self.infoButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [host addSubview:self.infoButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.infoButton.leadingAnchor constraintEqualToAnchor:self.closeButton.trailingAnchor constant:12],
+        [self.infoButton.centerYAnchor constraintEqualToAnchor:self.closeButton.centerYAnchor],
+        [self.infoButton.widthAnchor constraintEqualToConstant:38],
+        [self.infoButton.heightAnchor constraintEqualToConstant:36]
+    ]];
     self.drawingButton = [self featureButtonWithSymbol:@"pencil" action:@selector(toggleDrawingMode:) label:@"描画モード"]; 
     self.drawingButton.tintColor = UIColor.systemYellowColor;
     self.drawingButton.hidden = YES;
@@ -775,7 +798,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.drawingCategory = @"汎用";
     self.drawingLineStyle = @"実線";
     [self loadDrawingTextOptions];
-    self.drawingForegroundColor = UIColor.yellowColor;
+    self.drawingForegroundColor = UIColor.greenColor;
     self.drawingBackgroundColor = UIColor.clearColor;
     self.drawingCanvas.foregroundColor = self.drawingForegroundColor;
     self.drawingCanvas.backgroundColorForDrawing = self.drawingBackgroundColor;
@@ -874,7 +897,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     undo.frame = CGRectMake(6, 8 + titles.count * 46, 100, 38);
     undo.accessibilityLabel = @"直前の描画を取り消す";
     [undo setImage:[UIImage systemImageNamed:@"arrow.uturn.backward"] forState:UIControlStateNormal];
-    [undo setTitle:@"  Undo" forState:UIControlStateNormal];
+    [undo setTitle:nil forState:UIControlStateNormal];
     undo.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
     [undo setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     undo.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
@@ -883,7 +906,9 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self.drawingPalette addSubview:undo];
     UIButton *clear = [UIButton buttonWithType:UIButtonTypeSystem];
     clear.frame = CGRectMake(6, 8 + (titles.count + 1) * 46, 100, 38);
-    [clear setTitle:@"カテゴリを削除" forState:UIControlStateNormal];
+    [clear setTitle:nil forState:UIControlStateNormal];
+    [clear setImage:[UIImage systemImageNamed:@"trash"] forState:UIControlStateNormal];
+    clear.accessibilityLabel = @"カテゴリの描画を削除";
     clear.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
     [clear setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
     clear.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
@@ -893,6 +918,29 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveDrawingPalette:)];
     [self.drawingPalette addGestureRecognizer:pan];
     [self refreshDrawingPaletteState];
+    // 「文字」選択時だけ、左側パレットの反対側に表示する専用ボタン群。
+    self.drawingTextPalette = [[UIView alloc] initWithFrame:CGRectMake(host.bounds.size.width - 138, 120, 130, 430)];
+    self.drawingTextPalette.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
+    self.drawingTextPalette.backgroundColor = [UIColor colorWithWhite:0 alpha:.55];
+    self.drawingTextPalette.layer.cornerRadius = 10;
+    self.drawingTextPalette.hidden = YES;
+    [host addSubview:self.drawingTextPalette];
+    NSArray *textOptions = self.customDrawingTexts ?: [self defaultDrawingTextOptions];
+    for (NSUInteger i = 0; i < textOptions.count; i++) {
+        NSString *value = textOptions[i];
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+        button.frame = CGRectMake(6, 6 + (CGFloat)i * 36.0, 118, 32);
+        [button setTitle:value forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+        button.titleLabel.adjustsFontSizeToFitWidth = YES;
+        button.backgroundColor = [UIColor colorWithWhite:1 alpha:.12];
+        button.layer.cornerRadius = 6;
+        button.accessibilityLabel = [NSString stringWithFormat:@"文字 %@", value];
+        button.accessibilityIdentifier = value;
+        [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        [button addTarget:self action:@selector(selectDrawingTextButton:) forControlEvents:UIControlEventTouchUpInside];
+        [self.drawingTextPalette addSubview:button];
+    }
 }
 - (void)clearDrawingCategory:(id)sender {
     NSString *category = self.drawingCategory ?: @"汎用";
@@ -912,8 +960,12 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)refreshDrawingPaletteState {
     // パレットで選択した描画種別を実際の入力キャンバスへ同期する。
     self.drawingCanvas.tool = self.drawingTool ?: @"直線";
+    self.drawingTextPalette.hidden = !(self.drawingMode && [self.drawingTool isEqualToString:@"文字"]);
+    BOOL textMenuVisible = self.drawingMode && [self.drawingTool isEqualToString:@"文字"];
+    self.shareButton.hidden = textMenuVisible;
+    self.exportButton.hidden = textMenuVisible;
     self.drawingCanvas.drawingText = self.drawingText ?: @"";
-    self.drawingCanvas.foregroundColor = self.drawingForegroundColor ?: UIColor.yellowColor;
+    self.drawingCanvas.foregroundColor = self.drawingForegroundColor ?: UIColor.greenColor;
     self.drawingCanvas.backgroundColorForDrawing = self.drawingBackgroundColor ?: UIColor.clearColor;
     BOOL shape = [self.drawingTool isEqualToString:@"楕円"] || [self.drawingTool isEqualToString:@"四角"] || [self.drawingTool isEqualToString:@"三角"];
     BOOL axis = [self.drawingTool isEqualToString:@"軸1"] || [self.drawingTool isEqualToString:@"軸2"] || [self.drawingTool isEqualToString:@"軸3D"];
@@ -926,15 +978,18 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         if (button.tag >= 1 && button.tag <= 5) {
             NSInteger index = button.tag - 1;
             NSString *title = titles[index], *value = values[index];
-            NSString *summary = [NSString stringWithFormat:@"%@\n%@", title, value];
-            NSMutableAttributedString *attributed = [[NSMutableAttributedString alloc] initWithString:summary attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:11 weight:UIFontWeightSemibold], NSForegroundColorAttributeName:UIColor.whiteColor}];
-            [attributed addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:8 weight:UIFontWeightRegular] range:NSMakeRange(title.length + 1, value.length)];
-            if (index == 2) {
-                UIColor *selectedColor = self.drawingForegroundColor ?: UIColor.yellowColor;
-                if (selectedColor == UIColor.clearColor || CGColorGetAlpha(selectedColor.CGColor) < 0.01) selectedColor = [UIColor colorWithWhite:1 alpha:.45];
-                [attributed addAttribute:NSForegroundColorAttributeName value:selectedColor range:NSMakeRange(title.length + 1, value.length)];
+            if (index == 3) {
+                [button setImage:[UIImage systemImageNamed:@"textformat"] forState:UIControlStateNormal];
+                [button setAttributedTitle:nil forState:UIControlStateNormal];
+                button.tintColor = UIColor.whiteColor;
+                button.accessibilityLabel = @"文字メニュー";
+            } else {
+                NSArray *symbols = @[@"square.grid.2x2", @"pencil.tip", @"paintpalette", @"textformat", @"line.3.horizontal"];
+                [button setImage:[UIImage systemImageNamed:symbols[index]] forState:UIControlStateNormal];
+                [button setTitle:nil forState:UIControlStateNormal];
+                button.accessibilityLabel = [NSString stringWithFormat:@"%@メニュー（現在 %@）", title, value];
+                if (index == 2) button.tintColor = self.drawingForegroundColor ?: UIColor.greenColor;
             }
-            [button setAttributedTitle:attributed forState:UIControlStateNormal];
         }
         if (button.tag == 2) { button.enabled = !lineOnlyCategory; button.alpha = lineOnlyCategory ? .35 : 1.0; }
         if (button.tag == 3) { button.enabled = !axis; button.alpha = axis ? .35 : 1.0; }
@@ -990,12 +1045,17 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.drawingCanvas.userInteractionEnabled = YES;
         [self.speedControlHost bringSubviewToFront:self.drawingCanvas];
         [self.speedControlHost bringSubviewToFront:self.drawingPalette];
+        [self.speedControlHost bringSubviewToFront:self.drawingTextPalette];
         [self.speedControlHost bringSubviewToFront:self.drawingButton];
         [self.speedControlHost bringSubviewToFront:self.rotationHandle];
         [self.speedControlHost bringSubviewToFront:self.resizeHandle];
         self.drawingCanvas.drawingEnabled = YES;
         self.drawingCanvas.hidden = NO;
         self.drawingPalette.hidden = NO;
+        self.deleteButton.hidden = YES;
+        self.favoriteButton.hidden = YES;
+        self.infoButton.hidden = YES;
+        self.closeButton.hidden = YES;
         [self.drawingButton setImage:[UIImage systemImageNamed:@"pencil.circle.fill"] forState:UIControlStateNormal];
         [self.speedHideTimer invalidate];
     } else {
@@ -1005,6 +1065,10 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.drawingCanvas.drawingEnabled = NO;
         self.drawingCanvas.userInteractionEnabled = NO;
         self.drawingPalette.hidden = YES;
+        self.deleteButton.hidden = NO;
+        self.favoriteButton.hidden = NO;
+        self.infoButton.hidden = NO;
+        self.closeButton.hidden = NO;
         self.playlistPanGesture.enabled = YES;
         self.playlistOverlayPanGesture.enabled = YES;
         [self.drawingButton setImage:[UIImage systemImageNamed:@"pencil"] forState:UIControlStateNormal];
@@ -1012,6 +1076,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
     self.drawingCanvas.currentTime = self.player.currentTime;
     self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self refreshDrawingPaletteState];
 }
 - (void)moveDrawingPalette:(UIPanGestureRecognizer *)gesture {
     CGPoint translation = [gesture translationInView:self.drawingPalette.superview];
@@ -1179,14 +1244,14 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)drawingToolMenu:(id)sender { NSArray *values=@[@"文字",@"直線",@"矢印",@"丸",@"軸1",@"軸2",@"軸3D",@"楕円",@"四角",@"三角",@"x",@"角度",@"軌道",@"フリー"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) { NSString *display=[NSString stringWithFormat:@"%@    %@", [self drawingToolGlyph:v], [self drawingToolDisplayName:v]]; NSMutableDictionary *option=[[self drawingOption:v display:display selected:self.drawingTool] mutableCopy]; option[@"image"]=[self drawingToolIcon:v color:UIColor.labelColor]; [options addObject:option]; } [self showDrawingOptions:options title:@"描画種別" handler:^(NSString *v){ self.drawingTool=v; [self refreshDrawingPaletteState]; }]; }
 - (void)drawingCategoryMenu:(id)sender { NSArray *values=@[@"汎用",@"基準",@"対象"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) [options addObject:[self drawingOption:v display:v selected:self.drawingCategory]]; [self showDrawingOptions:options title:@"カテゴリ" handler:^(NSString *v){ self.drawingCategory=v; if ([v isEqualToString:@"基準"] || [v isEqualToString:@"対象"]) self.drawingTool=@"直線"; if ([v isEqualToString:@"基準"]) self.drawingLineStyle=@"点線"; [self refreshDrawingPaletteState]; }]; }
 - (void)drawingLineStyleMenu:(id)sender { NSArray *values=@[@"実線",@"点線",@"鎖線"]; NSArray *samples=@[@"━━━━━━  実線",@"• • • • •  点線",@"━━  ━━  ━━  鎖線"]; NSMutableArray *options=[NSMutableArray array]; for (NSInteger i=0;i<values.count;i++) [options addObject:[self drawingOption:values[i] display:samples[i] selected:self.drawingLineStyle]]; [self showDrawingOptions:options title:@"線種" handler:^(NSString *v){ self.drawingLineStyle=v; [self refreshDrawingPaletteState]; }]; }
-- (UIColor *)colorForName:(NSString *)name { NSDictionary *colors=@{@"黄":UIColor.yellowColor,@"緑":UIColor.greenColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; return colors[name] ?: UIColor.yellowColor; }
+- (UIColor *)colorForName:(NSString *)name { NSDictionary *colors=@{@"緑":UIColor.greenColor,@"黄":UIColor.yellowColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; return colors[name] ?: UIColor.greenColor; }
 - (NSString *)colorNameForColor:(UIColor *)color { if (!color) return @"なし"; CGFloat r=0,g=0,b=0,a=1; [color getRed:&r green:&g blue:&b alpha:&a]; if (a <= 0.01) return @"なし"; NSDictionary *colors=@{@"黄":UIColor.yellowColor,@"緑":UIColor.greenColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; for (NSString *name in colors) if ([color isEqual:colors[name]]) return name; return @"その他"; }
 - (void)drawingColorMenu:(BOOL)background {
-    NSArray *values=@[@"黄",@"緑",@"オレンジ",@"ピンク",@"明るい紫",@"赤",@"青",@"白",@"その他"];
+    NSArray *values=@[@"緑",@"黄",@"オレンジ",@"ピンク",@"明るい紫",@"赤",@"青",@"白",@"その他"];
     // UIAlertAction のタイトル内で個別に文字色を指定できないため、
     // 色が視認できる丸記号を先頭に置く（色名も併記してアクセシビリティを確保）。
-    NSArray *icons=@[@"🟡  黄",@"🟢  緑",@"🟠  オレンジ",@"🩷  ピンク",@"🟣  明るい紫",@"🔴  赤",@"🔵  青",@"⚪  白",@"＋  その他"];
-    NSArray *iconColors=@[UIColor.yellowColor, UIColor.greenColor, UIColor.orangeColor, [UIColor colorWithRed:1 green:.35 blue:.65 alpha:1], UIColor.systemPurpleColor, UIColor.redColor, UIColor.blueColor, UIColor.whiteColor, UIColor.lightGrayColor];
+    NSArray *icons=@[@"🟢  緑",@"🟡  黄",@"🟠  オレンジ",@"🩷  ピンク",@"🟣  明るい紫",@"🔴  赤",@"🔵  青",@"⚪  白",@"＋  その他"];
+    NSArray *iconColors=@[UIColor.greenColor, UIColor.yellowColor, UIColor.orangeColor, [UIColor colorWithRed:1 green:.35 blue:.65 alpha:1], UIColor.systemPurpleColor, UIColor.redColor, UIColor.blueColor, UIColor.whiteColor, UIColor.lightGrayColor];
     UIColor *selectedColor = background ? self.drawingBackgroundColor : self.drawingForegroundColor;
     NSString *selected = [self colorNameForColor:selectedColor];
     NSMutableArray *options=[NSMutableArray array]; for (NSInteger i=0;i<values.count;i++) [options addObject:[self drawingOption:values[i] display:icons[i] selected:selected image:[self drawingColorIcon:iconColors[i]]]];
@@ -1238,20 +1303,39 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [data writeToURL:[self drawingTextOptionsURL] options:NSDataWritingAtomic error:nil];
     [[NSUserDefaults standardUserDefaults] setObject:self.customDrawingTexts forKey:@"WJCustomDrawingTexts"];
 }
+- (void)selectDrawingTextButton:(UIButton *)sender {
+    if (![self.drawingTool isEqualToString:@"文字"]) return;
+    NSString *value = sender.accessibilityIdentifier ?: sender.currentTitle;
+    if ([value isEqualToString:@"⌨"]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"文字入力" message:@"16文字以内で入力してください" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"入力文字"; field.clearButtonMode = UITextFieldViewModeWhileEditing; }];
+        [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"登録" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *text = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (text.length > 0 && text.length <= 16) {
+                if (!self.customDrawingTexts) self.customDrawingTexts = [NSMutableArray array];
+                if (![self.customDrawingTexts containsObject:text]) [self.customDrawingTexts addObject:text];
+                [self saveDrawingTextOptions]; self.drawingText = text;
+            }
+            [self refreshDrawingPaletteState];
+            self.drawingTextPalette.hidden = YES;
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *text = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (text.length > 0 && text.length <= 16) self.drawingText = text;
+            [self refreshDrawingPaletteState];
+            self.drawingTextPalette.hidden = YES;
+        }]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    if (value.length) { self.drawingText = value; [self refreshDrawingPaletteState]; self.drawingTextPalette.hidden = YES; }
+}
 - (void)drawingTextMenu:(id)sender {
     if (![self.drawingTool isEqualToString:@"文字"]) return;
-    NSMutableArray *items=[NSMutableArray arrayWithArray:self.customDrawingTexts ?: [self defaultDrawingTextOptions]];
-    NSMutableArray *options=[NSMutableArray array]; for (NSString *v in items) [options addObject:[self drawingOption:v display:v selected:self.drawingText]];
-    [self showDrawingOptions:options title:@"文字" handler:^(NSString *v){
-        if ([v isEqualToString:@"⌨"]) {
-            UIAlertController *a=[UIAlertController alertControllerWithTitle:@"文字入力" message:@"16文字以内で入力してください" preferredStyle:UIAlertControllerStyleAlert];
-            [a addTextFieldWithConfigurationHandler:^(UITextField *f){ f.placeholder=@"入力文字"; f.clearButtonMode=UITextFieldViewModeWhileEditing; }];
-            [a addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
-            [a addAction:[UIAlertAction actionWithTitle:@"登録" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){ NSString *value=a.textFields.firstObject.text; if (value.length > 0 && value.length <= 16) { if (!self.customDrawingTexts) self.customDrawingTexts=[NSMutableArray array]; if (![self.customDrawingTexts containsObject:value]) [self.customDrawingTexts addObject:value]; [self saveDrawingTextOptions]; self.drawingText=value; } [self refreshDrawingPaletteState]; }]];
-            [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){ NSString *value=a.textFields.firstObject.text; if (value.length > 0 && value.length <= 16) self.drawingText=value; [self refreshDrawingPaletteState]; }]];
-            [self presentViewController:a animated:YES completion:nil];
-        } else { self.drawingText=v; [self refreshDrawingPaletteState]; }
-    }];
+    self.drawingTextPalette.hidden = NO;
+    [self.drawingTextPalette.superview bringSubviewToFront:self.drawingTextPalette];
+    return;
 }
 
 
@@ -1276,6 +1360,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.loopStartTime = kCMTimeInvalid;
         self.loopEndTime = kCMTimeInvalid;
         self.loopEnabled = NO;
+        self.loopSeekInProgress = NO;
         self.automaticLoopLimit = 0;
         self.automaticLoopCount = 0;
         self.automaticLoopDeadline = nil;
@@ -1422,6 +1507,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.frameBackButton.hidden = NO;
     self.frameStepButton.hidden = NO;
     self.favoriteButton.hidden = NO;
+    self.infoButton.hidden = NO;
     self.deleteButton.hidden = NO;
     self.drawingButton.hidden = self.player.rate > 0;
     self.timeLabel.hidden = NO;
@@ -1434,8 +1520,13 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self.speedControlHost bringSubviewToFront:self.exportButton];
     [self.speedControlHost bringSubviewToFront:self.favoriteButton];
     [self.speedControlHost bringSubviewToFront:self.closeButton];
+    [self.speedControlHost bringSubviewToFront:self.infoButton];
     [self.speedControlHost bringSubviewToFront:self.drawingButton];
     [self.speedControlHost bringSubviewToFront:self.favoriteIndicator];
+    // 文字メニュー表示中は、保存・共有などの再生操作より前面に固定する。
+    if (self.drawingMode && [self.drawingTool isEqualToString:@"文字"] && !self.drawingTextPalette.hidden) {
+        [self.speedControlHost bringSubviewToFront:self.drawingTextPalette];
+    }
     [self.speedHideTimer invalidate];
     if (self.drawingMode) return;
     // A点を設定した後は、B点を設定するまで操作列を消さない。
@@ -1454,6 +1545,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.favoriteButton.hidden = YES;
     self.deleteButton.hidden = YES;
     self.drawingButton.hidden = YES;
+    self.infoButton.hidden = YES;
     self.timeLabel.hidden = YES;
     self.drawingPalette.hidden = YES;
 }
@@ -1624,9 +1716,45 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)refreshFeatureButtons {
     self.loopStartButton.accessibilityValue = CMTIME_IS_VALID(self.loopStartTime) ? [NSString stringWithFormat:@"A %.2f秒", CMTimeGetSeconds(self.loopStartTime)] : @"未設定";
     self.loopEndButton.accessibilityValue = CMTIME_IS_VALID(self.loopEndTime) ? [NSString stringWithFormat:@"B %.2f秒", CMTimeGetSeconds(self.loopEndTime)] : @"未設定";
+    self.loopStartButton.backgroundColor = CMTIME_IS_VALID(self.loopStartTime) ? [UIColor.systemGreenColor colorWithAlphaComponent:.55] : [UIColor colorWithWhite:0 alpha:.25];
+    self.loopEndButton.backgroundColor = CMTIME_IS_VALID(self.loopEndTime) ? [UIColor.systemGreenColor colorWithAlphaComponent:.55] : [UIColor colorWithWhite:0 alpha:.25];
     self.loopButton.backgroundColor = self.loopEnabled ? [UIColor.systemBlueColor colorWithAlphaComponent:0.5] : [UIColor colorWithWhite:0 alpha:0.25];
     self.mirrorButton.backgroundColor = self.mirroredPlayback ? [UIColor.systemBlueColor colorWithAlphaComponent:0.5] : [UIColor colorWithWhite:0 alpha:0.25];
     self.skeletonButton.backgroundColor = self.skeletonVisible ? [UIColor.systemBlueColor colorWithAlphaComponent:0.5] : [UIColor colorWithWhite:0 alpha:0.25];
+}
+
+- (void)showVideoInfo:(id)sender {
+    NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
+    if (!url) return;
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+    AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    NSDictionary *values = [url resourceValuesForKeys:@[NSURLFileSizeKey, NSURLCreationDateKey] error:nil];
+    NSNumber *size = values[NSURLFileSizeKey];
+    NSDate *created = values[NSURLCreationDateKey];
+    NSString *dateText = created ? [NSDateFormatter localizedStringFromDate:created dateStyle:NSDateFormatterMediumStyle timeStyle:NSDateFormatterMediumStyle] : @"情報なし";
+    double duration = CMTimeGetSeconds(asset.duration);
+    NSString *durationText = isfinite(duration) ? [NSString stringWithFormat:@"%.2f 秒", duration] : @"情報なし";
+    NSString *resolution = track ? [NSString stringWithFormat:@"%.0f × %.0f", fabs(track.naturalSize.width), fabs(track.naturalSize.height)] : @"情報なし";
+    NSString *fps = (track && track.nominalFrameRate > 0) ? [NSString stringWithFormat:@"%.2f fps", track.nominalFrameRate] : @"情報なし";
+    NSString *sizeText = size ? [NSString stringWithFormat:@"%.2f MB", size.doubleValue / 1048576.0] : @"情報なし";
+    NSArray *tags = [self tagsForVideoURL:url];
+    NSString *tagText = tags.count ? [tags componentsJoinedByString:@", "] : @"情報なし";
+    NSString *message = [NSString stringWithFormat:@"ファイル名: %@\n撮影日時: %@\n撮影端末: 情報なし\n長さ: %@\n解像度: %@\nフレームレート: %@\nファイルサイズ: %@\nタグ: %@", url.lastPathComponent, dateText, durationText, resolution, fps, sizeText, tagText];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"動画情報" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (NSArray<NSString *> *)tagsForVideoURL:(NSURL *)url {
+    NSURL *sidecar = [url URLByAppendingPathExtension:@"tags.json"];
+    NSData *data = [NSData dataWithContentsOfURL:sidecar];
+    id object = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if ([object isKindOfClass:NSArray.class]) return object;
+    if ([object isKindOfClass:NSDictionary.class]) {
+        id tags = object[@"tags"] ?: object[@"selectedTags"];
+        if ([tags isKindOfClass:NSArray.class]) return tags;
+    }
+    return @[];
 }
 
 - (void)toggleSkeleton:(id)sender {
@@ -1689,8 +1817,16 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)toggleLoop:(id)sender {
-    // A/B が未設定でも動画全体のリピートを有効化できる。
-    self.loopEnabled = !self.loopEnabled;
+    // 再度タップした場合は、リピート動作だけでなくA/Bの設定も解除する。
+    // 未設定時の「動画全体リピート」も同じトグルで解除できる。
+    if (self.loopEnabled) {
+        self.loopEnabled = NO;
+        self.loopStartTime = kCMTimeInvalid;
+        self.loopEndTime = kCMTimeInvalid;
+        self.loopSeekInProgress = NO;
+    } else {
+        self.loopEnabled = YES;
+    }
     [self refreshFeatureButtons];
     [self showSpeedControls];
 }

@@ -189,6 +189,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 - (NSString *)pairingCode { if (@available(iOS 13.0, *)) return self.transfer.discovery.pairingCode; return @"iOS 13以降が必要です"; }
 - (NSString *)peerDescription { if (@available(iOS 13.0, *)) return [NSString stringWithFormat:@"%@・%@", self.transfer.discovery.selectedName, self.transfer.discovery.peerAvailable ? @"検出済み（転送時に認証）" : @"未接続"]; return @"未対応"; }
 - (NSArray *)discoveredPeers { if (@available(iOS 13.0, *)) return self.transfer.discovery.peers; return @[]; }
+- (NSArray *)registeredPeers { if (@available(iOS 13.0, *)) return self.transfer.discovery.registeredPeers; return @[]; }
 - (BOOL)registerPeer:(NSString *)name code:(NSString *)code { if (@available(iOS 13.0, *)) return [self.transfer.discovery registerPeer:name code:code]; return NO; }
 - (void)retryTransfer { if (@available(iOS 13.0, *)) [self.transfer retry]; }
 - (void)retransferVideoURL:(NSURL *)url { if (@available(iOS 13.0, *)) [self.transfer requeue:url]; }
@@ -235,7 +236,8 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     self.recording.duration = [[NSUserDefaults standardUserDefaults] doubleForKey:@"WJDuration"];
     if (@available(iOS 13.0, *)) {
         self.transfer.enabled = active && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"];
-        [self.transfer configureWithReceiving:active && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] browsing:self.transfer.enabled];
+        BOOL browsePeers = active && ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"]);
+        [self.transfer configureWithReceiving:active && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] browsing:browsePeers];
     }
     [self publish];
     UIApplication.sharedApplication.idleTimerDisabled = self.modeEnabled || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
@@ -271,13 +273,24 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 
 - (void)sendSubCameraCommand:(NSString *)command {
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera"]) return;
-    NSString *raw = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"];
-    if (raw.length == 0 || ![command isEqualToString:@"START"] && ![command isEqualToString:@"STOP"]) return;
+    NSArray<NSString *> *rawURLs = @[
+        [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"] ?: @"",
+        [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCamera2URL"] ?: @""
+    ];
+    NSArray<NSNumber *> *enabled = @[
+        @([[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera"]),
+        @([[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera2"])
+    ];
+    if (![command isEqualToString:@"START"] && ![command isEqualToString:@"STOP"]) return;
+    for (NSUInteger index = 0; index < rawURLs.count; index++) {
+        if (!enabled[index].boolValue) continue;
+        NSString *raw = rawURLs[index];
+        if (raw.length == 0) continue;
     NSURLComponents *components = [NSURLComponents componentsWithString:raw];
     NSString *token = components.fragment;
     components.fragment = nil;
     NSString *base = components.URL.absoluteString;
-    if (base.length == 0 || token.length == 0) return;
+    if (base.length == 0 || token.length == 0) continue;
     NSURL *url = [NSURL URLWithString:[base stringByAppendingPathComponent:command.lowercaseString]];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
@@ -290,7 +303,8 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         else NSLog(@"[SubCamera] %@ sent", command);
 #endif
     }];
-    [task resume];
+        [task resume];
+    }
 }
 
 - (void)considerLocalMainRecordingURL:(NSURL *)url {
