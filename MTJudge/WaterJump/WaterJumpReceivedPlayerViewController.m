@@ -1,4 +1,7 @@
 #import "WaterJumpReceivedPlayerViewController.h"
+#import "WaterJumpComparisonViewController.h"
+#import "WaterJumpSettingsViewController.h"
+#import "MTJudge-Swift.h"
 #import <Vision/Vision.h>
 #import "../SkeletonConnections.h"
 #import "../Analysis/VideoPoseAnalysisManager.h"
@@ -262,6 +265,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) NSTimer *speedHideTimer;
 @property (nonatomic, strong) UIView *featureControlContainer;
+@property (nonatomic, strong) UIButton *compareButton;
 @property (nonatomic, strong) UIButton *loopStartButton;
 @property (nonatomic, strong) UIButton *loopEndButton;
 @property (nonatomic, strong) UIButton *loopButton;
@@ -737,6 +741,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.skeletonButton = [self featureButtonWithSymbol:@"figure.stand" action:@selector(toggleSkeleton:) label:@"骨格線表示"];
     self.strobeButton = [self featureButtonWithSymbol:@"camera.aperture" action:@selector(toggleStrobe:) label:@"ストロボ画像"];
     self.strobeButton.tintColor = UIColor.systemOrangeColor;
+    self.compareButton = [self featureButtonWithSymbol:@"plus.rectangle.on.rectangle" action:@selector(selectComparisonVideo:) label:@"比較する動画を選択"];
+    self.compareButton.tintColor = UIColor.systemGreenColor;
     self.deleteButton = [self featureButtonWithSymbol:@"trash" action:@selector(deleteCurrentVideo:) label:@"再生中の動画を削除"];
     self.deleteButton.tintColor = UIColor.systemRedColor;
     self.deleteButton.hidden = YES;
@@ -836,19 +842,19 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.shareButton.translatesAutoresizingMaskIntoConstraints = NO;
     [host addSubview:self.shareButton];
     [NSLayoutConstraint activateConstraints:@[
-        [self.shareButton.trailingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.trailingAnchor constant:-16],
-        [self.shareButton.centerYAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.centerYAnchor],
+        [self.shareButton.trailingAnchor constraintEqualToAnchor:self.favoriteButton.leadingAnchor constant:-6],
+        [self.shareButton.topAnchor constraintEqualToAnchor:self.favoriteButton.topAnchor],
         [self.shareButton.widthAnchor constraintEqualToConstant:38], [self.shareButton.heightAnchor constraintEqualToConstant:36]
     ]];
     self.exportButton.translatesAutoresizingMaskIntoConstraints = NO;
     [host addSubview:self.exportButton];
     [NSLayoutConstraint activateConstraints:@[
         [self.exportButton.trailingAnchor constraintEqualToAnchor:self.shareButton.leadingAnchor constant:-6],
-        [self.exportButton.centerYAnchor constraintEqualToAnchor:self.shareButton.centerYAnchor],
+        [self.exportButton.topAnchor constraintEqualToAnchor:self.favoriteButton.topAnchor],
         [self.exportButton.widthAnchor constraintEqualToConstant:38], [self.exportButton.heightAnchor constraintEqualToConstant:36]
     ]];
     // A点からTakeoffまでを画面幅の80%に広げ、均等間隔で配置する。
-    UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.mirrorButton, self.skeletonButton, self.takeoffButton, self.strobeButton]];
+    UIStackView *featureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.mirrorButton, self.skeletonButton, self.takeoffButton, self.strobeButton, self.compareButton]];
     featureStack.translatesAutoresizingMaskIntoConstraints = NO;
     featureStack.axis = UILayoutConstraintAxisHorizontal;
     featureStack.alignment = UIStackViewAlignmentCenter;
@@ -1500,6 +1506,24 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self presentViewController:configuration animated:YES completion:nil];
 }
 
+// 通常の動画再生画面から、別の保存動画を選んで比較再生へ進む。
+// 現在再生中の動画をMAIN、選択した動画をSUBとして扱う。
+- (void)selectComparisonVideo:(id)sender {
+    AVAsset *asset = self.player.currentItem.asset;
+    NSURL *mainURL = [asset isKindOfClass:[AVURLAsset class]] ? [(AVURLAsset *)asset URL] : nil;
+    if (!mainURL) return;
+    __weak typeof(self) weakSelf = self;
+    UIViewController *library = [WaterJumpSettingsViewController videoLibraryViewControllerForComparisonWithMainURL:mainURL selection:^(NSURL *url) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+        WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:url];
+        [self presentViewController:comparison animated:YES completion:^{ [comparison startPlayback]; }];
+    }];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:library];
+    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+    [self presentViewController:navigation animated:YES completion:nil];
+}
+
 - (void)showSpeedControls {
     self.speedControlContainer.hidden = NO;
     self.featureControlContainer.hidden = NO;
@@ -1522,6 +1546,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self.speedControlHost bringSubviewToFront:self.closeButton];
     [self.speedControlHost bringSubviewToFront:self.infoButton];
     [self.speedControlHost bringSubviewToFront:self.drawingButton];
+    [self.speedControlHost bringSubviewToFront:self.compareButton];
     [self.speedControlHost bringSubviewToFront:self.favoriteIndicator];
     // 文字メニュー表示中は、保存・共有などの再生操作より前面に固定する。
     if (self.drawingMode && [self.drawingTool isEqualToString:@"文字"] && !self.drawingTextPalette.hidden) {
@@ -1748,11 +1773,35 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (NSArray<NSString *> *)tagsForVideoURL:(NSURL *)url {
     NSURL *sidecar = [url URLByAppendingPathExtension:@"tags.json"];
     NSData *data = [NSData dataWithContentsOfURL:sidecar];
+    if (!data) {
+        NSURL *stemSidecar = [[[url URLByDeletingPathExtension] URLByAppendingPathExtension:@"tags"] URLByAppendingPathExtension:@"json"];
+        data = [NSData dataWithContentsOfURL:stemSidecar];
+    }
     id object = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-    if ([object isKindOfClass:NSArray.class]) return object;
+    if ([object isKindOfClass:NSArray.class]) {
+        NSMutableArray *names = [NSMutableArray array];
+        for (id item in (NSArray *)object) {
+            if ([item isKindOfClass:NSString.class]) [names addObject:item];
+            else if ([item isKindOfClass:NSDictionary.class] && [item[@"name"] isKindOfClass:NSString.class]) [names addObject:item[@"name"]];
+        }
+        if (names.count) return names;
+    }
     if ([object isKindOfClass:NSDictionary.class]) {
         id tags = object[@"tags"] ?: object[@"selectedTags"];
-        if ([tags isKindOfClass:NSArray.class]) return tags;
+        if ([tags isKindOfClass:NSArray.class]) {
+            NSMutableArray *names = [NSMutableArray array];
+            for (id item in (NSArray *)tags) {
+                if ([item isKindOfClass:NSString.class]) [names addObject:item];
+                else if ([item isKindOfClass:NSDictionary.class] && [item[@"name"] isKindOfClass:NSString.class]) [names addObject:item[@"name"]];
+            }
+            if (names.count) return names;
+        }
+    }
+    NSArray *latest = [[NSUserDefaults standardUserDefaults] arrayForKey:@"LatestCameraRecordingTags"];
+    if ([latest isKindOfClass:NSArray.class] && latest.count && [url.path isEqualToString:[[NSUserDefaults standardUserDefaults] stringForKey:@"LatestCameraRecordingPath"]]) {
+        NSMutableArray *names = [NSMutableArray array];
+        for (NSDictionary *item in latest) if ([item isKindOfClass:NSDictionary.class] && [item[@"name"] isKindOfClass:NSString.class]) [names addObject:item[@"name"]];
+        if (names.count) return names;
     }
     return @[];
 }

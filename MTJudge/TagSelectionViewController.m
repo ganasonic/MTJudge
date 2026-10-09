@@ -32,8 +32,8 @@
         [self.tableView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [self.tableView.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor]
     ]];
-    UIBarButtonItem *save = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"square.and.arrow.down"] style:UIBarButtonItemStyleDone target:self action:@selector(saveRecording)];
-    save.accessibilityLabel = @"ダウンロードに保存";
+    UIBarButtonItem *save = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"checkmark"] style:UIBarButtonItemStyleDone target:self action:@selector(saveRecording)];
+    save.accessibilityLabel = self.videoFileURL ? @"ダウンロードに保存" : @"既定タグを保存";
     self.toolbarItems = @[[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil], save];
 }
 
@@ -92,7 +92,7 @@
     return self.categories.count ? self.categories[section].tagName : @"タグカテゴリ未登録";
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    return section == MAX(self.categories.count, 1) - 1 ? @"右下の保存ボタンでダウンロードに保存します。" : nil;
+    return section == MAX(self.categories.count, 1) - 1 ? (self.videoFileURL ? @"右下の保存ボタンで動画を保存します。" : @"右下のチェックボタンで録画前の既定タグを保存します。") : nil;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];

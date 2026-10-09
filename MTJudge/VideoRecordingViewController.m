@@ -11,6 +11,9 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 #import "TagListViewController.h" // 追加
 #import "TagSelectionViewController.h"
+#import "TagManager.h"
+#import "Tag.h"
+#import "TagItem.h"
 #import "FileSaver.h"
 #import "WaterJump/RecordingController.h"
 #import "WaterJump/WaterJumpCoordinator.h"
@@ -67,6 +70,9 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UIButton *skeletonButton;
 @property (nonatomic, strong) UIButton *tagButton;
 @property (nonatomic, assign) BOOL tagSelectionEnabled;
+// 0=タグなし、1=A（録画停止後に選択）、2=B（既定タグを自動付与）
+@property (nonatomic, assign) NSInteger tagMode;
+@property (nonatomic, strong) UILabel *tagModeBadge;
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIStackView *zoomPresetsRow;
 @property (nonatomic, copy) NSArray<NSNumber *> *displayedZoomPresets;
@@ -159,6 +165,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
     // 初期状態で描画を有効にする
     self.isSkeletonDrawingEnabled = NO;
+    self.tagMode = 0;
+    self.tagSelectionEnabled = NO;
     NSString *latestPath = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestCameraRecordingPath"];
     if (latestPath && [[NSFileManager defaultManager] fileExistsAtPath:latestPath]) {
         self.latestRecordingURL = [NSURL fileURLWithPath:latestPath];
@@ -245,8 +253,17 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
             return;
         }
         if (self.recordingController.automaticRecording) {
+            BOOL isSubCameraBeforeSave = [[[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraRole"] isEqualToString:@"SUB_CAMERA"];
+            NSArray *defaultsBeforeSave = (!isSubCameraBeforeSave && self.tagMode == 2) ? [self defaultTagSelections] : @[];
+            BOOL originalTagBeforeTransfer = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTagBeforeTransfer"];
+            // Automatic saving used to enqueue the file before the default/manual tags
+            // could be applied.  Defer that enqueue while this recording is finalized,
+            // otherwise the queue keeps the old filename and the untagged sidecar.
+            BOOL deferTransferForTags = !isSubCameraBeforeSave && (self.tagSelectionEnabled || defaultsBeforeSave.count > 0);
+            if (deferTransferForTags) [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WJTagBeforeTransfer"];
             [[WaterJumpCoordinator shared] saveAutomatic:outputFileURL completion:^(NSURL *saved, NSDictionary *metadata, NSError *saveError) {
                 BOOL isSubCamera = [[[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraRole"] isEqualToString:@"SUB_CAMERA"];
+                if (deferTransferForTags) [[NSUserDefaults standardUserDefaults] setBool:originalTagBeforeTransfer forKey:@"WJTagBeforeTransfer"];
                 if (saved) {
                     self.latestRecordingURL = saved;
                     [[NSUserDefaults standardUserDefaults] setObject:saved.path forKey:@"LatestCameraRecordingPath"];
@@ -261,6 +278,11 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
                         self.pendingAutomaticMetadata = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] ? metadata : nil;
                         self.pendingRecordingURL = saved;
                         [self presentRecordingReview];
+                    } else if (!isSubCamera && defaultsBeforeSave.count > 0) {
+                        // Default tags are applied without opening the tag picker.
+                        [self finalizeAutomaticRecordingURL:saved metadata:metadata tags:defaultsBeforeSave];
+                        self.pendingRecordingURL = nil;
+                        [self.recordingController markSaved];
                     } else {
                         [self.recordingController markSaved];
                     }
@@ -298,6 +320,59 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     });
 }
 
+- (NSURL *)finalizeAutomaticRecordingURL:(NSURL *)url metadata:(NSDictionary *)metadata tags:(NSArray<NSDictionary *> *)tags {
+    if (!url) return nil;
+    NSURL *finalURL = url;
+    NSError *moveError = nil;
+    if (tags.count) {
+        NSCharacterSet *unsafe = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r"];
+        NSMutableArray *names = [NSMutableArray array];
+        for (NSDictionary *selection in tags) {
+            NSString *raw = selection[@"name"] ?: @"";
+            NSString *name = [[raw componentsSeparatedByCharactersInSet:unsafe] componentsJoinedByString:@"-"];
+            if (name.length) [names addObject:[name substringToIndex:MIN(name.length, 24)]];
+        }
+        if (names.count) {
+            NSDateFormatter *formatter = [NSDateFormatter new];
+            formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+            formatter.dateFormat = @"yyyyMMddHHmmssSSS";
+            NSString *base = [NSString stringWithFormat:@"MTJ%@_%@", [formatter stringFromDate:[NSDate date]], [names componentsJoinedByString:@"_"]];
+            NSURL *candidate = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[base stringByAppendingString:@".MOV"]];
+            NSUInteger index = 1;
+            while ([[NSFileManager defaultManager] fileExistsAtPath:candidate.path] && ![candidate.path isEqualToString:url.path]) {
+                candidate = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_%lu.MOV", base, (unsigned long)index++]];
+            }
+            if (![candidate.path isEqualToString:url.path] && [[NSFileManager defaultManager] moveItemAtURL:url toURL:candidate error:&moveError]) {
+                // Keep the durable transfer metadata beside the renamed movie.
+                for (NSString *suffix in @[@"wj.json", @"drawing.json"]) {
+                    NSURL *oldSidecar = [url URLByAppendingPathExtension:suffix];
+                    NSURL *newSidecar = [candidate URLByAppendingPathExtension:suffix];
+                    if ([[NSFileManager defaultManager] fileExistsAtPath:oldSidecar.path]) [NSFileManager.defaultManager moveItemAtURL:oldSidecar toURL:newSidecar error:nil];
+                }
+                finalURL = candidate;
+            }
+        }
+    }
+    if (moveError) NSLog(@"[Tags] automatic filename update failed: %@", moveError.localizedDescription);
+    self.latestRecordingURL = finalURL;
+    self.pendingRecordingURL = finalURL;
+    [[NSUserDefaults standardUserDefaults] setObject:finalURL.path forKey:@"LatestCameraRecordingPath"];
+    if (tags.count) {
+        [[NSUserDefaults standardUserDefaults] setObject:tags forKey:@"LatestCameraRecordingTags"];
+        NSData *tagData = [NSJSONSerialization dataWithJSONObject:tags options:0 error:nil];
+        if (tagData) [tagData writeToURL:[finalURL URLByAppendingPathExtension:@"tags.json"] options:NSDataWritingAtomic error:nil];
+    } else {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+    }
+    if (metadata && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"]) {
+        [[WaterJumpCoordinator shared] enqueueAutomaticVideoURL:finalURL metadata:metadata tags:tags ?: @[]];
+    }
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"]) {
+        [[WaterJumpCoordinator shared] considerLocalMainRecordingURL:finalURL];
+    }
+    return finalURL;
+}
+
 - (void)presentRecordingReview {
     if (!self.pendingRecordingURL || self.presentedViewController) return;
     TagSelectionViewController *review = [[TagSelectionViewController alloc] initWithVideoFileURL:self.pendingRecordingURL];
@@ -310,7 +385,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         typeof(self) self = weakSelf;
         if (!self) return;
         NSError *error = nil;
-        if (selections.count && !self.pendingAutomaticMetadata) {
+        if (selections.count) {
             NSMutableArray *names = [NSMutableArray array];
             NSCharacterSet *unsafe = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r"];
             for (NSDictionary *selection in selections) {
@@ -321,13 +396,15 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
             NSString *suffix = [formatter stringFromDate:[NSDate date]];
             NSString *prefix = [names componentsJoinedByString:@"_"];
             prefix = [prefix substringToIndex:MIN(prefix.length, 60)];
-            NSURL *taggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.MOV", prefix, suffix]];
+            NSURL *taggedURL = [[self.pendingRecordingURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"MTJ%@_%@.MOV", suffix, prefix]];
             if ([[NSFileManager defaultManager] moveItemAtURL:self.pendingRecordingURL toURL:taggedURL error:&error]) {
                 self.pendingRecordingURL = taggedURL;
                 self.latestRecordingURL = taggedURL;
                 [[NSUserDefaults standardUserDefaults] setObject:taggedURL.path forKey:@"LatestCameraRecordingPath"];
                 // カテゴリ名とタグIDも動画に関連付けてアプリ内に保持する。
                 [[NSUserDefaults standardUserDefaults] setObject:selections forKey:@"LatestCameraRecordingTags"];
+                NSData *tagData = [NSJSONSerialization dataWithJSONObject:selections options:0 error:nil];
+                if (tagData) [tagData writeToURL:[taggedURL URLByAppendingPathExtension:@"tags.json"] options:NSDataWritingAtomic error:nil];
             }
         } else if (!self.pendingAutomaticMetadata) {
             NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmssSSS";
@@ -376,11 +453,42 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self presentViewController:navigation animated:YES completion:nil];
 }
 
+- (NSArray<NSDictionary *> *)defaultTagSelections {
+    NSMutableArray *result = [NSMutableArray array];
+    for (Tag *category in [TagManager sharedManager].tags) {
+        NSString *itemID = [[TagManager sharedManager] lastSelectedItemIdForTag:category];
+        if (!itemID.length) continue;
+        for (TagItem *item in category.tagItems) {
+            if ([item.tagItemId isEqualToString:itemID]) {
+                [result addObject:@{ @"category": category.tagName ?: @"", @"id": item.tagItemId ?: @"", @"name": item.itemName ?: @"" }];
+                break;
+            }
+        }
+    }
+    return result;
+}
+
 - (void)savePendingWithoutTags {
     if (!self.pendingRecordingURL) return;
     NSURL *url = self.pendingRecordingURL;
     NSDateFormatter *formatter = [NSDateFormatter new]; formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]; formatter.dateFormat = @"yyyyMMddHHmmssSSS";
-    NSURL *target = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[NSString stringWithFormat:@"MTJ%@.MOV", [formatter stringFromDate:[NSDate date]]]];
+    BOOL isSubCamera = [[[NSUserDefaults standardUserDefaults] stringForKey:@"WJCameraRole"] isEqualToString:@"SUB_CAMERA"];
+    NSArray<NSDictionary *> *defaults = (!isSubCamera && self.tagMode == 2) ? [self defaultTagSelections] : @[];
+    NSString *timestamp = [formatter stringFromDate:[NSDate date]];
+    NSString *baseName = nil;
+    if (defaults.count) {
+        NSCharacterSet *unsafe = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r"];
+        NSMutableArray *names = [NSMutableArray array];
+        for (NSDictionary *tag in defaults) {
+            NSString *rawName = tag[@"name"] ?: @"";
+            NSString *name = [[rawName componentsSeparatedByCharactersInSet:unsafe] componentsJoinedByString:@"-"];
+            if (name.length) [names addObject:[name substringToIndex:MIN(name.length, 24)]];
+        }
+        baseName = names.count ? [NSString stringWithFormat:@"MTJ%@_%@", timestamp, [names componentsJoinedByString:@"_"]] : [NSString stringWithFormat:@"MTJ%@", timestamp];
+    } else {
+        baseName = [NSString stringWithFormat:@"MTJ%@", timestamp];
+    }
+    NSURL *target = [[url URLByDeletingLastPathComponent] URLByAppendingPathComponent:[baseName stringByAppendingString:@".MOV"]];
     NSError *error = nil;
     if (![url isEqual:target] && [[NSFileManager defaultManager] fileExistsAtPath:url.path]) {
         if (![[NSFileManager defaultManager] moveItemAtURL:url toURL:target error:&error]) target = url;
@@ -388,7 +496,15 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.pendingRecordingURL = nil;
     self.latestRecordingURL = target;
     [[NSUserDefaults standardUserDefaults] setObject:target.path forKey:@"LatestCameraRecordingPath"];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+    NSURL *tagSidecar = [target URLByAppendingPathExtension:@"tags.json"];
+    if (defaults.count) {
+        [[NSUserDefaults standardUserDefaults] setObject:defaults forKey:@"LatestCameraRecordingTags"];
+        NSData *tagData = [NSJSONSerialization dataWithJSONObject:defaults options:0 error:nil];
+        if (tagData) [tagData writeToURL:tagSidecar options:NSDataWritingAtomic error:nil];
+    } else {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LatestCameraRecordingTags"];
+        [[NSFileManager defaultManager] removeItemAtURL:tagSidecar error:nil];
+    }
     [self.recordingController markSaved];
     [self updateCameraControls];
     if (error) NSLog(@"untagged save failed: %@", error);
@@ -621,7 +737,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 // タグ管理画面に遷移するメソッドを追加
 - (IBAction)manageTagsButtonTapped:(id)sender {
-    self.tagSelectionEnabled = !self.tagSelectionEnabled;
+    self.tagMode = (self.tagMode + 1) % 3;
+    self.tagSelectionEnabled = (self.tagMode == 1);
     [self updateCameraControls];
 }
 
@@ -735,6 +852,22 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.playButton = [self cameraButtonWithAction:@selector(togglePlayback:)];
     self.skeletonButton = [self cameraButtonWithAction:@selector(toggleSkeletonDrawing:)];
     self.tagButton = [self cameraButtonWithAction:@selector(manageTagsButtonTapped:)];
+    self.tagModeBadge = [[UILabel alloc] init];
+    self.tagModeBadge.translatesAutoresizingMaskIntoConstraints = NO;
+    self.tagModeBadge.textAlignment = NSTextAlignmentCenter;
+    self.tagModeBadge.font = [UIFont boldSystemFontOfSize:12.0];
+    self.tagModeBadge.textColor = UIColor.whiteColor;
+    self.tagModeBadge.backgroundColor = UIColor.systemBlueColor;
+    self.tagModeBadge.layer.cornerRadius = 8.0;
+    self.tagModeBadge.clipsToBounds = YES;
+    self.tagModeBadge.userInteractionEnabled = NO;
+    [self.tagButton addSubview:self.tagModeBadge];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.tagModeBadge.trailingAnchor constraintEqualToAnchor:self.tagButton.trailingAnchor constant:-2],
+        [self.tagModeBadge.topAnchor constraintEqualToAnchor:self.tagButton.topAnchor constant:2],
+        [self.tagModeBadge.widthAnchor constraintEqualToConstant:16],
+        [self.tagModeBadge.heightAnchor constraintEqualToConstant:16]
+    ]];
     UILongPressGestureRecognizer *tagEditGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(editTagsLongPress:)];
     tagEditGesture.minimumPressDuration = .6;
     [self.tagButton addGestureRecognizer:tagEditGesture];
@@ -808,8 +941,12 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self styleButton:self.playButton title:playing ? @"再生停止" : @"最新動画を再生" symbol:playing ? @"stop.fill" : @"play.fill" color:UIColor.systemBlueColor];
     [self styleButton:self.skeletonButton title:self.isSkeletonDrawingEnabled ? @"骨格を非表示" : @"骨格を表示" symbol:@"figure.walk" color:self.isSkeletonDrawingEnabled ? [UIColor colorWithRed:0.08 green:0.45 blue:0.28 alpha:1] : neutral];
     self.skeletonButton.accessibilityValue = self.isSkeletonDrawingEnabled ? @"表示中" : @"非表示";
-    [self styleButton:self.tagButton title:self.tagSelectionEnabled ? @"タグ選択ON" : @"タグ選択OFF" symbol:@"tag.fill" color:self.tagSelectionEnabled ? UIColor.systemBlueColor : neutral];
-    self.tagButton.accessibilityValue = self.tagSelectionEnabled ? @"録画停止後にタグ選択を表示" : @"録画停止後にタグ選択を非表示";
+    UIColor *tagColor = self.tagMode == 1 ? UIColor.systemBlueColor : (self.tagMode == 2 ? UIColor.systemGreenColor : neutral);
+    [self styleButton:self.tagButton title:(self.tagMode == 1 ? @"録画停止後にタグ選択" : (self.tagMode == 2 ? @"既定タグを自動付与" : @"タグなし")) symbol:@"tag.fill" color:tagColor];
+    self.tagModeBadge.text = self.tagMode == 1 ? @"A" : (self.tagMode == 2 ? @"B" : nil);
+    self.tagModeBadge.hidden = self.tagMode == 0;
+    self.tagModeBadge.backgroundColor = tagColor;
+    self.tagButton.accessibilityValue = self.tagMode == 1 ? @"A: 録画停止後にタグ選択" : (self.tagMode == 2 ? @"B: 既定タグを自動付与" : @"タグなし");
     [self styleButton:self.guideButton title:self.guideEnabled ? @"十字ガイドを非表示" : @"十字ガイドを表示" symbol:@"scope" color:self.guideEnabled ? UIColor.systemBlueColor : neutral];
     self.guideButton.accessibilityValue = self.guideEnabled ? @"表示中" : @"非表示";
     [self styleButton:self.saveButton title:@"保存先を選択" symbol:@"square.and.arrow.down" color:neutral];

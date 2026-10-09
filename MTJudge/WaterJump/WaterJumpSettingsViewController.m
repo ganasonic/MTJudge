@@ -1,4 +1,5 @@
 #import "WaterJumpSettingsViewController.h"
+#import "../TagSelectionViewController.h"
 
 static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if (!videoURL) return @[];
@@ -28,6 +29,13 @@ static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) NSURL *selectedMainURL;
 @property (nonatomic, strong) NSURL *selectedSubURL;
 @property (nonatomic, assign) BOOL gridMode;
+@property (nonatomic, assign) BOOL comparisonSelectionMode;
+@property (nonatomic, strong) NSURL *comparisonMainURL;
+@property (nonatomic, copy) void (^comparisonSelectionHandler)(NSURL *url);
+@property (nonatomic, strong) UIPanGestureRecognizer *multiSelectPanGesture;
+@property (nonatomic, strong) NSMutableSet<NSIndexPath *> *dragSelectedIndexPaths;
+@property (nonatomic, strong) NSTimer *multiSelectAutoScrollTimer;
+@property (nonatomic, assign) CGPoint multiSelectLastPoint;
 @end
 static UIImage *WJQRCodeImage(NSString *value) {
     if (!value.length) return nil;
@@ -227,15 +235,21 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [super viewDidLoad];
     self.title = @"練習動画";
     self.gridMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJVideoGridMode"];
-    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
+    self.navigationItem.leftBarButtonItem = self.comparisonSelectionMode ? nil : [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
     UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
     UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
     grid.accessibilityLabel = @"リスト表示とサムネイル表示を切り替え";
-    self.navigationItem.rightBarButtonItems = @[photo, grid];
+    self.navigationItem.rightBarButtonItems = self.comparisonSelectionMode ? @[] : @[photo, grid];
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectComparisonVideo:)];
     longPress.minimumPressDuration = .55;
     longPress.cancelsTouchesInView = YES;
-    [self.tableView addGestureRecognizer:longPress];
+    if (!self.comparisonSelectionMode) [self.tableView addGestureRecognizer:longPress];
+    self.dragSelectedIndexPaths = [NSMutableSet set];
+    self.multiSelectPanGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(multiSelectPan:)];
+    self.multiSelectPanGesture.cancelsTouchesInView = NO;
+    self.multiSelectPanGesture.maximumNumberOfTouches = 1;
+    self.multiSelectPanGesture.enabled = NO;
+    [self.tableView addGestureRecognizer:self.multiSelectPanGesture];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoDeleted" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoSaved" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoFavoritesChanged" object:nil];
@@ -243,6 +257,8 @@ static UIImage *WJQRCodeImage(NSString *value) {
 }
 - (void)beginMultiSelect {
     self.editing = YES;
+    self.multiSelectPanGesture.enabled = YES;
+    [self.dragSelectedIndexPaths removeAllObjects];
     self.tableView.allowsMultipleSelectionDuringEditing = YES;
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(endMultiSelect)];
     UIBarButtonItem *share = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(shareSelectedVideos)];
@@ -258,11 +274,64 @@ static UIImage *WJQRCodeImage(NSString *value) {
 }
 - (void)endMultiSelect {
     self.editing = NO;
+    self.multiSelectPanGesture.enabled = NO;
+    [self.multiSelectAutoScrollTimer invalidate];
+    self.multiSelectAutoScrollTimer = nil;
+    [self.dragSelectedIndexPaths removeAllObjects];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"選択" style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
     UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:@"写真" style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
     UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
     grid.accessibilityLabel = @"リスト表示とサムネイル表示を切り替え";
     self.navigationItem.rightBarButtonItems = @[photo, grid];
+}
+- (void)multiSelectAutoScrollTick:(NSTimer *)timer {
+    if (!self.editing) return;
+    CGFloat edge = 72.0;
+    CGFloat y = self.multiSelectLastPoint.y;
+    CGFloat delta = 0;
+    if (y < edge) delta = -10.0 * (1.0 - MAX(0, y) / edge);
+    else if (y > self.tableView.bounds.size.height - edge) delta = 10.0 * (1.0 - MAX(0, self.tableView.bounds.size.height - y) / edge);
+    if (fabs(delta) < 0.5) return;
+    CGPoint offset = self.tableView.contentOffset;
+    CGFloat minY = -self.tableView.adjustedContentInset.top;
+    CGFloat maxY = MAX(minY, self.tableView.contentSize.height - self.tableView.bounds.size.height + self.tableView.adjustedContentInset.bottom);
+    offset.y = MIN(maxY, MAX(minY, offset.y + delta));
+    [self.tableView setContentOffset:offset animated:NO];
+    NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:self.multiSelectLastPoint];
+    if (indexPath && indexPath.section == 0 && indexPath.row < self.videos.count && ![self.dragSelectedIndexPaths containsObject:indexPath]) {
+        [self.dragSelectedIndexPaths addObject:indexPath];
+        [self.tableView selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
+        [self.tableView cellForRowAtIndexPath:indexPath].accessoryType = UITableViewCellAccessoryCheckmark;
+    }
+}
+- (void)updateMultiSelectAutoScroll {
+    CGFloat edge = 72.0;
+    BOOL nearEdge = self.multiSelectLastPoint.y < edge || self.multiSelectLastPoint.y > self.tableView.bounds.size.height - edge;
+    if (nearEdge && !self.multiSelectAutoScrollTimer) {
+        self.multiSelectAutoScrollTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:self selector:@selector(multiSelectAutoScrollTick:) userInfo:nil repeats:YES];
+    } else if (!nearEdge) {
+        [self.multiSelectAutoScrollTimer invalidate];
+        self.multiSelectAutoScrollTimer = nil;
+    }
+}
+- (void)multiSelectPan:(UIPanGestureRecognizer *)gesture {
+    if (!self.editing || self.comparisonSelectionMode) return;
+    UIGestureRecognizerState state = gesture.state;
+    self.multiSelectLastPoint = [gesture locationInView:self.tableView];
+    if (state == UIGestureRecognizerStateBegan) [self.dragSelectedIndexPaths removeAllObjects];
+    if (state == UIGestureRecognizerStateEnded || state == UIGestureRecognizerStateCancelled || state == UIGestureRecognizerStateFailed) {
+        [self.multiSelectAutoScrollTimer invalidate];
+        self.multiSelectAutoScrollTimer = nil;
+        return;
+    }
+    if (state != UIGestureRecognizerStateBegan && state != UIGestureRecognizerStateChanged) return;
+    [self updateMultiSelectAutoScroll];
+    NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:self.multiSelectLastPoint];
+    if (!indexPath || indexPath.section != 0 || indexPath.row >= self.videos.count || [self.dragSelectedIndexPaths containsObject:indexPath]) return;
+    [self.dragSelectedIndexPaths addObject:indexPath];
+    [self.tableView selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
+    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+    cell.accessoryType = UITableViewCellAccessoryCheckmark;
 }
 - (NSArray<NSURL *> *)selectedVideoURLs {
     NSMutableArray *urls = [NSMutableArray array];
@@ -294,7 +363,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [self endMultiSelect];
     [self refreshVideos];
 }
-- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)dealloc { [self.multiSelectAutoScrollTimer invalidate]; [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self refreshVideos]; }
 - (void)refreshVideos { if (@available(iOS 13.0, *)) { self.videos = [ReceivedVideoManager videos]; [self.tableView reloadData]; } }
 - (void)toggleGridMode {
@@ -367,9 +436,12 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [favoriteButton setImage:[UIImage systemImageNamed:(favorite ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
     [favoriteButton addTarget:self action:@selector(toggleFavoriteInList:) forControlEvents:UIControlEventTouchUpInside];
     favoriteButton.frame = CGRectMake(0, 0, 40, 44);
+    if (self.comparisonSelectionMode) {
+        cell.accessoryView = nil;
+    }
     UIStackView *actions = [[UIStackView alloc] initWithArrangedSubviews:@[retransferButton, shareButton, favoriteButton, deleteButton]];
     actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 2; actions.frame = CGRectMake(0, 0, 168, 44);
-    cell.accessoryView = actions;
+    if (!self.comparisonSelectionMode) cell.accessoryView = actions;
     if (self.editing) {
         BOOL selected = [self.tableView.indexPathsForSelectedRows containsObject:indexPath];
         cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
@@ -397,6 +469,13 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [self presentViewController:comparison animated:YES completion:^{ [comparison startPlayback]; }];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (self.comparisonSelectionMode) {
+        NSURL *url = self.videos[indexPath.row];
+        if ([url.path isEqualToString:self.comparisonMainURL.path]) { [tableView deselectRowAtIndexPath:indexPath animated:NO]; return; }
+        void (^handler)(NSURL *) = self.comparisonSelectionHandler;
+        [self.navigationController dismissViewControllerAnimated:YES completion:^{ if (handler) handler(url); }];
+        return;
+    }
     // 複数選択モードでは行タップは選択／解除だけにし、動画を再生しない。
     if (self.editing) {
         UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
@@ -479,6 +558,13 @@ static UIImage *WJQRCodeImage(NSString *value) {
 
 @implementation WaterJumpSettingsViewController
 + (UIViewController *)videoLibraryViewController { return [WJVideoLibrary new]; }
++ (UIViewController *)videoLibraryViewControllerForComparisonWithMainURL:(NSURL *)mainURL selection:(void (^)(NSURL *url))selection {
+    WJVideoLibrary *library = [WJVideoLibrary new];
+    library.comparisonSelectionMode = YES;
+    library.comparisonMainURL = mainURL;
+    library.comparisonSelectionHandler = selection;
+    return library;
+}
 - (void)viewDidLoad {
     [super viewDidLoad]; self.title = @"ウォータージャンプ";
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
@@ -491,7 +577,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)refresh { [self.tableView reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 13;
+    if (section == 0) return 14;
     if (section == 1) return 9;
     if (section == 2) return 1;
     return [WaterJumpCoordinator shared].discoveredPeers.count;
@@ -507,9 +593,10 @@ static UIImage *WJQRCodeImage(NSString *value) {
     cell.textLabel.numberOfLines = 0; cell.detailTextLabel.numberOfLines = 0;
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
     if (indexPath.section == 0) {
-        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"リモートカメラ1を使う", @"ループ再生設定", @"カメラ名", @"リモートカメラ2を使う"];
+        NSArray *names = @[@"ウォータージャンプモード", @"Remote Camera", @"Apple Watch Remote", @"録画時間", @"録画後自動転送", @"この端末で受信待機", @"タグ付け後に転送", @"転送後自動再生", @"転送先でループ再生する", @"リモートカメラ1を使う", @"ループ再生設定", @"カメラ名", @"リモートカメラ2を使う", @"タグ選択"];
         cell.textLabel.text = names[indexPath.row];
-        if (indexPath.row == 3) { cell.accessibilityIdentifier = @"WJDuration"; NSInteger duration = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJDuration"]; cell.detailTextLabel.text = duration > 0 ? [NSString stringWithFormat:@"%ld秒", (long)duration] : @"ー（手動停止）"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
+        if (indexPath.row == 13) { cell.detailTextLabel.text = @"録画前に選手名などの既定タグを選択"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
+        else if (indexPath.row == 3) { cell.accessibilityIdentifier = @"WJDuration"; NSInteger duration = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJDuration"]; cell.detailTextLabel.text = duration > 0 ? [NSString stringWithFormat:@"%ld秒", (long)duration] : @"ー（手動停止）"; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
         else if (indexPath.row == 10) {
             NSInteger count = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJLoopCount"]; if (count == 0) count = 3;
             NSInteger seconds = [[NSUserDefaults standardUserDefaults] integerForKey:@"WJLoopDuration"];
@@ -670,6 +757,23 @@ static UIImage *WJQRCodeImage(NSString *value) {
     scanner.modalPresentationStyle = UIModalPresentationFormSheet;
     [self presentViewController:scanner animated:YES completion:nil];
 }
+- (void)presentDefaultTagSelection {
+    TagSelectionViewController *selection = [[TagSelectionViewController alloc] initWithVideoFileURL:nil];
+    selection.selections = @[];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:selection];
+    navigation.modalPresentationStyle = UIModalPresentationFormSheet;
+    __weak UINavigationController *weakNavigation = navigation;
+    __weak typeof(self) weakSelf = self;
+    selection.saveHandler = ^(NSArray<NSDictionary<NSString *,NSString *> *> *tags) {
+        __strong typeof(weakSelf) self = weakSelf;
+        [weakNavigation dismissViewControllerAnimated:YES completion:^{ [self refresh]; }];
+    };
+    UIViewController *presenter = self.presentingViewController;
+    [self dismissViewControllerAnimated:YES completion:^{
+        UIViewController *host = presenter ?: self;
+        [host presentViewController:navigation animated:YES completion:nil];
+    }];
+}
 - (void)scanQRButtonTapped:(UIButton *)sender {
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
     if (sender.tag == 1 && manager.remoteAddress.length) { UIPasteboard.generalPasteboard.string = manager.remoteAddress; [self showQRCodeForValue:manager.remoteAddress title:@"WebリモコンURL"]; }
@@ -681,6 +785,10 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
+    if (indexPath.section == 0 && indexPath.row == 13 && !manager.recordingBusy) {
+        [self presentDefaultTagSelection];
+        return;
+    }
     if (indexPath.section == 0 && indexPath.row == 3 && !manager.recordingBusy) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画時間" message:nil preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"ー（手動停止）" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
