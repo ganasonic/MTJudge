@@ -9,6 +9,8 @@
 NSString * const WJStatusChanged = @"WJStatusChanged";
 @interface WaterJumpCoordinator ()
 @property (nonatomic, strong) RemoteRecordingServer *server;
+@property (nonatomic, strong, readwrite) CameraGroupManager *group;
+@property (nonatomic, strong) NSTimer *groupRefreshTimer;
 @property (nonatomic, strong) WatchRemoteController *watch;
 @property (nonatomic, strong) VideoTransferManager *transfer;
 @property (nonatomic, strong) WaterJumpReceivedPlayerViewController *receivedPlayer;
@@ -59,7 +61,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         __weak typeof(self) weakSelf = self;
         _server.command = ^NSDictionary *(NSString *command) { return [weakSelf command:command]; };
         _server.status = ^NSDictionary *{ return [weakSelf status]; };
-        _server.changed = ^{ [weakSelf publish]; };
+        _server.changed = ^{ [weakSelf.group configureWithActive:UIApplication.sharedApplication.applicationState == UIApplicationStateActive remoteAddress:weakSelf.remoteAddress ?: @""]; [weakSelf publish]; };
         _watch = [WatchRemoteController new];
         _watch.command = _server.command;
         _watch.status = _server.status;
@@ -67,8 +69,31 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         if (@available(iOS 13.0, *)) { _transfer = [VideoTransferManager new]; _transfer.changed = ^{ [weakSelf publish]; };
             _transfer.received = ^(NSURL *url) {
                 [[NSUserDefaults standardUserDefaults] setObject:url.path forKey:@"LatestCameraRecordingPath"];
+                if (weakSelf.group.automatic && [weakSelf.group.role isEqual:@"MAIN"]) {
+                    NSData *data = [NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]];
+                    NSDictionary *metadata = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+                    if (metadata && weakSelf.registeredPeers.count) [weakSelf.transfer enqueue:url metadata:metadata];
+                }
                 [weakSelf handleReceivedURL:url];
             }; }
+        _group = [[CameraGroupManager alloc] initWithDiscovery:_transfer.discovery];
+        _group.changed = ^{ [weakSelf publish]; };
+        _group.canChangeSettings = ^BOOL { return !weakSelf.recordingBusy && !weakSelf.communicationBusy; };
+        _group.settingsChanged = ^{ [weakSelf.server stop]; [weakSelf.transfer suspend]; [weakSelf.receivedSessions removeAllObjects]; [weakSelf applySettings]; };
+        _group.approval = ^(NSString *name, NSString *role, void (^reply)(BOOL)) {
+            UIViewController *host = [weakSelf activePresentationHost];
+            if (!host || [host isKindOfClass:UIAlertController.class]) { reply(NO); return; }
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"グループへの参加を許可しますか？" message:[NSString stringWithFormat:@"%@\n役割: %@\nこの端末との録画操作・動画転送に必要な接続情報を共有します。",name,role] preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"許可しない" style:UIAlertActionStyleCancel handler:^(UIAlertAction *a){ reply(NO); }]];
+            [alert addAction:[UIAlertAction actionWithTitle:@"許可" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ reply(YES); }]];
+            [host presentViewController:alert animated:YES completion:nil];
+        };
+        _groupRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:3 repeats:YES block:^(NSTimer *timer) {
+            if (weakSelf.group.automatic && UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+                if (weakSelf.modeEnabled && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJWeb"]) [weakSelf.server start];
+                [weakSelf.group configureWithActive:YES remoteAddress:weakSelf.remoteAddress ?: @""];
+            }
+        }];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(background) name:UIApplicationDidEnterBackgroundNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(foreground) name:UIApplicationDidBecomeActiveNotification object:nil];
         [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"WJDuration":@20}];
@@ -178,6 +203,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 }
 - (void)background {
     [self.recording stop];
+    [self.group configureWithActive:NO remoteAddress:@""];
     // LINEやChromeへ切り替えた間も、Webリモコンの待受とURLを維持する。
     // iOSがプロセスを停止した場合だけ、foreground復帰時に同じ固定ポートで再開する。
     if (@available(iOS 13.0, *)) [self.transfer suspend];
@@ -186,6 +212,8 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 - (void)foreground { [self applySettings]; [self displayReceived]; }
 - (BOOL)protectsVideo:(NSURL *)url { if (!url) return NO; if (@available(iOS 13.0, *)) return [self.transfer protects:url]; return NO; }
 - (BOOL)recordingBusy { return self.recording.busy; }
+- (BOOL)communicationBusy { return self.transfer.communicationBusy; }
+- (BOOL)transferNeedsRetry { return self.transfer.needsRetry; }
 - (NSString *)pairingCode { if (@available(iOS 13.0, *)) return self.transfer.discovery.pairingCode; return @"iOS 13以降が必要です"; }
 - (NSString *)peerDescription { if (@available(iOS 13.0, *)) return [NSString stringWithFormat:@"%@・%@", self.transfer.discovery.selectedName, self.transfer.discovery.peerAvailable ? @"検出済み（転送時に認証）" : @"未接続"]; return @"未対応"; }
 - (NSArray *)discoveredPeers { if (@available(iOS 13.0, *)) return self.transfer.discovery.peers; return @[]; }
@@ -239,6 +267,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         BOOL browsePeers = active && ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJTransfer"] || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"]);
         [self.transfer configureWithReceiving:active && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] browsing:browsePeers];
     }
+    [self.group configureWithActive:active remoteAddress:self.remoteAddress ?: @""];
     [self publish];
     UIApplication.sharedApplication.idleTimerDisabled = self.modeEnabled || [[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
 }
@@ -272,14 +301,16 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 }
 
 - (void)sendSubCameraCommand:(NSString *)command {
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera"]) return;
+    if (self.group.automatic && ![self.group.role isEqual:@"MAIN"]) return;
     NSArray<NSString *> *rawURLs = @[
         [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCameraURL"] ?: @"",
-        [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCamera2URL"] ?: @""
+        [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCamera2URL"] ?: @"",
+        [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSubCamera3URL"] ?: @""
     ];
     NSArray<NSNumber *> *enabled = @[
         @([[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera"]),
-        @([[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera2"])
+        @([[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera2"]),
+        @([[NSUserDefaults standardUserDefaults] boolForKey:@"WJUseSubCamera3"])
     ];
     if (![command isEqualToString:@"START"] && ![command isEqualToString:@"STOP"]) return;
     for (NSUInteger index = 0; index < rawURLs.count; index++) {
@@ -295,13 +326,15 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
     [request setValue:token forHTTPHeaderField:@"X-MTJudge-Token"];
+    if (self.group.automatic) [request setValue:self.group.groupID forHTTPHeaderField:@"X-MTJudge-Group"];
     NSString *sessionID = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSessionID"];
     if (sessionID.length) [request setValue:sessionID forHTTPHeaderField:@"X-MTJudge-Session"];
     NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-#if DEBUG
-        if (error) NSLog(@"[SubCamera] %@ failed: %@", command, error.localizedDescription);
-        else NSLog(@"[SubCamera] %@ sent", command);
-#endif
+        NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+        if (error || status != 200) dispatch_async(dispatch_get_main_queue(), ^{
+            self.message = [NSString stringWithFormat:@"リモートカメラ%luの%@失敗: %@",(unsigned long)index+1,command,error.localizedDescription ?: [NSString stringWithFormat:@"HTTP %ld",(long)status]];
+            [self publish];
+        });
     }];
         [task resume];
     }
@@ -364,7 +397,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 #if DEBUG
     NSLog(@"[Remote] %@ received", command);
 #endif
-    if (!self.modeEnabled || !self.recording || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return @{@"error":@"撮影端末でウォータージャンプモードをONにし、カメラ画面を開いてください。"};
+    if (!self.modeEnabled || !self.recording || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return @{@"error":@"撮影端末でリモート操作モードをONにし、カメラ画面を開いてください。"};
     if ([command isEqual:@"START"]) {
         NSError *error = nil;
         if (![self.recording startAutomatic:YES error:&error]) return @{@"error":error.localizedDescription ?: @"録画中または保存中です。"};

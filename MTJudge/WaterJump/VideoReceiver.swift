@@ -24,6 +24,12 @@ final class VideoReceiver {
     func cancel() { finish(nil, ReceivedVideoManager.failure("受信を停止しました。送信元の動画は保持されています。")) }
     private func begin(_ info: [String: Any]) {
         do {
+            let defaults = UserDefaults.standard
+            if defaults.string(forKey:"WJConnectionMode") == "automatic" {
+                guard let group = defaults.string(forKey:"WJCameraGroupID"), !group.isEmpty,
+                      info["groupID"] as? String == group, let sender = info["senderID"] as? String,
+                      (defaults.stringArray(forKey:"WJGroupAllowedSenders") ?? []).contains(sender) else { throw ReceivedVideoManager.failure("グループまたは送信端末の所属が一致しません") }
+            }
             guard let id = info["id"] as? String, UUID(uuidString:id) != nil,
                   info["version"] as? Int == 1,
                   let size = info["size"] as? NSNumber, size.int64Value > 0, size.int64Value <= 8 * 1024 * 1024 * 1024,
@@ -66,6 +72,7 @@ final class VideoReceiver {
                     guard expected == entry.hash else { throw ReceivedVideoManager.failure("関連JSONのハッシュが一致しません。") }
                     let suffix = entry.name
                     let destination = URL(fileURLWithPath: url.path + suffix)
+                    if suffix == ".wj.json" { continue }
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.moveItem(at: dataURL, to: destination)
                 }

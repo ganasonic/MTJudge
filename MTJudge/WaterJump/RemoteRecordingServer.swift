@@ -15,7 +15,14 @@ import Darwin
     private var token = ""
     private let preferredPort: UInt16 = 8765
     @objc public func start() {
-        guard listener == nil else { return }
+        guard listener == nil else {
+            if let port = listener?.port {
+                let host = Self.wifiAddress()
+                let updated = host.isEmpty ? "" : "http://\(host):\(port.rawValue)/#\(token)"
+                if updated != address { address = updated; changed?() }
+            }
+            return
+        }
         if let saved = UserDefaults.standard.string(forKey: "WJRemoteToken"), !saved.isEmpty {
             token = saved
         } else {
@@ -31,7 +38,8 @@ import Darwin
                 switch state {
                 case .ready:
                     self.errorMessage = ""
-                    self.address = "http://\(Self.wifiAddress()):\(listener.port!.rawValue)/#\(self.token)"
+                    let host = Self.wifiAddress()
+                    self.address = host.isEmpty ? "" : "http://\(host):\(listener.port!.rawValue)/#\(self.token)"
                 case .failed(let error): self.errorMessage = "リモコン待受を開始できません: \(error.localizedDescription)"; self.stop()
                 default: break
                 }
@@ -80,9 +88,11 @@ import Darwin
         guard headers["transfer-encoding"] == nil, (headers["content-length"] ?? "0") == "0" else { respond(id, 400, ["error":"本文は不要です"]); return }
         if method == "GET" && path == "/" { send(id, 200, "text/html; charset=utf-8", Data(Self.page.utf8)); return }
         guard !token.isEmpty, headers["x-mtjudge-token"] == token else { respond(id, 403, ["error":"接続用URLをカメラ設定から開いてください"]); return }
+        if UserDefaults.standard.string(forKey:"WJConnectionMode") == "automatic",
+           let group = headers["x-mtjudge-group"], group != UserDefaults.standard.string(forKey:"WJCameraGroupID") { respond(id,403,["error":"グループが一致しません"]); return }
         if let session = headers["x-mtjudge-session"], UUID(uuidString: session) != nil {
             UserDefaults.standard.set(session, forKey: "WJSessionID")
-            UserDefaults.standard.set("SUB_CAMERA", forKey: "WJCameraRole")
+            if UserDefaults.standard.string(forKey:"WJConnectionMode") != "automatic" { UserDefaults.standard.set("SUB_CAMERA", forKey: "WJCameraRole") }
         }
         if let origin = headers["origin"], origin != "http://" + (headers["host"] ?? "") { respond(id, 403, [:]); return }
         if method == "GET" && path == "/status" { respond(id, 200, status?() ?? ["state":"IDLE"]); return }
@@ -103,7 +113,7 @@ import Darwin
     }
     private static func wifiAddress() -> String {
         var list: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&list) == 0 else { return "Wi-Fi未接続" }
+        guard getifaddrs(&list) == 0 else { return "" }
         defer { freeifaddrs(list) }
         var pointer = list
         while let entry = pointer {
@@ -112,7 +122,7 @@ import Darwin
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 { return String(cString: host) }
         }
-        return "Wi-Fi未接続"
+        return ""
     }
     private static let page = """
     <!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MTJudge Remote</title>

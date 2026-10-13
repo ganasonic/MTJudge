@@ -17,7 +17,7 @@
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *command = [message[@"command"] isKindOfClass:NSString.class] ? message[@"command"] : @"";
         if ([command isEqual:@"STATUS"]) { replyHandler(self.status ? self.status() : @{@"state":@"IDLE"}); return; }
-        if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJWatch"]) { replyHandler(@{@"error":@"Apple Watch RemoteをONにしてください。"}); return; }
+        if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJWatch"]) { replyHandler(@{@"error":@"Apple Watch録画をONにしてください。"}); return; }
         replyHandler(self.command ? self.command(command) : @{@"error":@"カメラ未準備"});
     });
 }

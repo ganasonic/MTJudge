@@ -1,3 +1,4 @@
+#import "MTJLocalization.h"
 //
 //  DMViewController.m
 //  MTJudge
@@ -220,9 +221,9 @@
         self.judgePoint7.hidden = YES;
         self.label6.hidden = YES;
         self.label7.hidden = YES;
-        self.label3.text = @"Judge 3 Air";
-        self.label4.text = @"Judge 4 Speed";
-        self.label5.text = @"Judge 5 Overall";
+        self.label3.text = MTJText(@"Judge 3 Air");
+        self.label4.text = MTJText(@"Judge 4 Speed");
+        self.label5.text = MTJText(@"Judge 5 Overall");
 
     //7 Judge
     } else {
@@ -230,9 +231,9 @@
         self.judgePoint7.hidden = NO;
         self.label6.hidden = NO;
         self.label7.hidden = NO;
-        self.label3.text = @"Judge 3 Turn";
-        self.label4.text = @"Judge 4 Turn";
-        self.label5.text = @"Judge 5 Air";
+        self.label3.text = MTJText(@"Judge 3 Turn");
+        self.label4.text = MTJText(@"Judge 4 Turn");
+        self.label5.text = MTJText(@"Judge 5 Air");
     }
 }
 

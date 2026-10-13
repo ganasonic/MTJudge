@@ -1,0 +1,75 @@
+PASS: synthetic video writer starts
+PASS: frame 0
+PASS: frame 1
+PASS: frame 2
+PASS: frame 3
+PASS: frame 4
+PASS: frame 5
+PASS: frame 6
+PASS: frame 7
+PASS: frame 8
+PASS: frame 9
+PASS: frame 10
+PASS: frame 11
+PASS: frame 12
+PASS: frame 13
+PASS: frame 14
+PASS: frame 15
+PASS: frame 16
+PASS: frame 17
+PASS: frame 18
+PASS: frame 19
+PASS: frame 20
+PASS: frame 21
+PASS: frame 22
+PASS: frame 23
+PASS: frame 24
+PASS: frame 25
+PASS: frame 26
+PASS: frame 27
+PASS: frame 28
+PASS: frame 29
+PASS: synthetic movie completed
+PASS: TLS listener ready
+PASS: transfer finished within timeout
+transfer result: ["id": 3F7C7344-3C43-417D-89A9-52A1870AFD71, "state": TRANSFERRED]
+PASS: TLS video transfer and receiver ACK
+PASS: source/destination SHA-256 match
+PASS: transfer finished within timeout
+transfer result: ["id": 3F7C7344-3C43-417D-89A9-52A1870AFD71, "state": TRANSFERRED]
+PASS: duplicate retransmission acknowledged
+PASS: duplicate is not registered twice
+PASS: category/tag metadata preserved
+PASS: transfer finished within timeout
+transfer result: ["error": 受信した動画のサイズまたはハッシュが一致しません。再送してください。]
+PASS: hash mismatch rejected
+PASS: corrupted file not registered
+PASS: transfer finished within timeout
+transfer result: ["disconnected": true]
+PASS: disconnect preserves sender original
+PASS: transfer finished within timeout
+transfer result: ["id": CC4E3418-3666-4C4B-A6BC-D426B7A13E51, "state": TRANSFERRED]
+PASS: retry after disconnect succeeds
+PASS: two separate recordings retained
+PASS: transfer finished within timeout
+transfer result: ["error": "通信が途切れました。元動画は保持しています。再送してください。"]
+PASS: unregistered TLS key rejected
+PASS: transfer finished within timeout
+transfer result: ["error": 受信する動画情報が不正です。]
+PASS: path traversal rejected
+PASS: transfer finished within timeout
+transfer result: ["error": グループまたは送信端末の所属が一致しません]
+PASS: A receiver rejects D group even with valid TLS key
+PASS: transfer finished within timeout
+transfer result: ["error": グループまたは送信端末の所属が一致しません]
+PASS: extra receiver rejects non-main sender
+PASS: transfer finished within timeout
+transfer result: ["id": 3F7C7344-3C43-417D-89A9-52A1870AFD71, "state": TRANSFERRED]
+PASS: authorized main sender accepted in matching group
+PASS: same filename with different content creates a real renamed movie
+PASS: renamed movie retains complete bytes
+PASS: restart reconstructs two queued recordings
+PASS: queued source protected from deletion
+PASS: queue retains chronological order
+PASS: ACKed recording not requeued after restart
+ALL TRANSFER TESTS PASSED; artifacts: /var/folders/8p/19w69j2s4cz2ccw_rc3z1d4r0000gn/T/MTJudge-WJ-tests-55D29236-CB1A-4026-9415-94CECEF4C779

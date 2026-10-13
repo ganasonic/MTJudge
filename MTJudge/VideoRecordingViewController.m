@@ -1,3 +1,4 @@
+#import "MTJLocalization.h"
 #import "VideoRecordingViewController.h"
 
 static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
@@ -60,6 +61,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @end
 
 @interface VideoRecordingViewController () <UIDocumentPickerDelegate>
+@property (nonatomic, strong) UIButton *transferRetryButton;
 @property (nonatomic, strong) UILabel *waterJumpStatus;
 @property (nonatomic, strong) RecordingController *recordingController;
 @property (nonatomic, strong) NSURL *pendingRecordingURL;
@@ -175,11 +177,11 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.requestedZoom = 1.0;
     [self setupCameraControls];
     UIButton *remote = [self cameraButtonWithAction:@selector(openWaterJump)];
-    [self styleButton:remote title:@"ウォータージャンプ設定" symbol:@"gearshape.fill" color:UIColor.darkGrayColor];
+    [self styleButton:remote title:MTJText(@"リモート操作設定") symbol:@"gearshape.fill" color:UIColor.darkGrayColor];
     remote.accessibilityIdentifier = @"WJSettingsButton";
     remote.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:remote];
     UIButton *album = [self cameraButtonWithAction:@selector(openSavedVideos)];
-    [self styleButton:album title:@"保存動画一覧" symbol:@"photo.on.rectangle" color:UIColor.systemBlueColor];
+    [self styleButton:album title:MTJText(@"保存動画一覧") symbol:@"photo.on.rectangle" color:UIColor.systemBlueColor];
     album.accessibilityIdentifier = @"SavedVideosButton";
     album.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:album];
     self.waterJumpStatus = [UILabel new]; self.waterJumpStatus.translatesAutoresizingMaskIntoConstraints = NO;
@@ -226,13 +228,15 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)openWaterJump {
     if (self.recordingController.busy) return;
-    [self presentViewController:[[UINavigationController alloc] initWithRootViewController:[WaterJumpSettingsViewController new]] animated:YES completion:nil];
+    [self presentViewController:[[UINavigationController alloc] initWithRootViewController:[WaterJumpSettingsViewController remoteSetupViewController]] animated:YES completion:nil];
 }
+- (void)retryFailedTransfer { [[WaterJumpCoordinator shared] retryTransfer]; }
 - (void)updateWaterJumpStatus {
+    self.transferRetryButton.hidden = ![WaterJumpCoordinator shared].transferNeedsRetry;
     NSDictionary *status = [[WaterJumpCoordinator shared] status];
     self.waterJumpStatus.hidden = ![WaterJumpCoordinator shared].modeEnabled && ![[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
     [self updateCameraControls];
-    self.waterJumpStatus.text = [NSString stringWithFormat:@"%@\n%@", status[@"state"], status[@"message"]];
+    self.waterJumpStatus.text = [NSString stringWithFormat:@"%@\n%@", MTJText(status[@"state"]), MTJText(status[@"message"])];
 }
 #pragma mark - VideoRecorderDelegate
 - (void)videoRecorderDidStart:(id)recorder { [self.recordingController didStart]; }
@@ -245,7 +249,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         BOOL finishedSuccessfully = !error || [error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] boolValue];
         [self.recordingController finishedWithError:finishedSuccessfully ? nil : error];
         if (!finishedSuccessfully) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画できませんでした"
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"録画できませんでした")
                                                                                    message:error.localizedDescription
                                                                             preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -418,7 +422,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
             }
         }
         if (error) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"タグを保存できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"タグを保存できませんでした") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [self.presentedViewController presentViewController:alert animated:YES completion:nil];
             return;
@@ -443,7 +447,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [[NSUserDefaults standardUserDefaults] setObject:self.latestRecordingURL.path forKey:@"LatestCameraRecordingPath"];
         [self updateCameraControls];
         [self dismissViewControllerAnimated:YES completion:^{
-            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, @"動画を保存しました");
+            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, MTJText(@"動画を保存しました"));
         }];
     };
     review.saveHandler = ^(NSArray *selections) {
@@ -514,7 +518,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if (self.downloadsPicker) return;
     self.downloadsReadyHandler = completion;
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.folder"] inMode:UIDocumentPickerModeOpen];
-    picker.title = @"ダウンロードフォルダを選択";
+    picker.title = MTJText(@"ダウンロードフォルダを選択");
     picker.allowsMultipleSelection = NO;
     picker.delegate = self;
     picker.modalPresentationStyle = UIModalPresentationFormSheet;
@@ -548,7 +552,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
             if (remembered) {
                 if (ready) ready();
             } else {
-                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"保存先を登録できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"保存先を登録できませんでした") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
                 [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
                 [self.presentedViewController presentViewController:alert animated:YES completion:nil];
             }
@@ -764,10 +768,10 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         // iPadのローカル動画とリモート動画を比較再生へ結び付けられない。
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         [defaults setBool:NO forKey:@"WJRemoteStartInProgress"];
-        [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
+        if (![[defaults stringForKey:@"WJConnectionMode"] isEqual:@"automatic"]) [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
         NSError *startError = nil;
         if (![self.recordingController startAutomatic:[WaterJumpCoordinator shared].modeEnabled error:&startError]) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"録画を開始できません" message:startError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"録画を開始できません") message:startError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:alert animated:YES completion:nil];
             return;
@@ -885,13 +889,17 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.recordButton.widthAnchor constraintEqualToConstant:56],
         [self.recordButton.heightAnchor constraintEqualToConstant:56]
     ]];
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.strobeButton, self.deleteButton, self.saveButton]];
+    self.transferRetryButton = [self cameraButtonWithAction:@selector(retryFailedTransfer)];
+    [self styleButton:self.transferRetryButton title:MTJText(@"転送を再送") symbol:@"arrow.clockwise.icloud" color:UIColor.systemOrangeColor];
+    self.transferRetryButton.hidden = ![WaterJumpCoordinator shared].transferNeedsRetry;
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.playButton, self.skeletonButton, self.tagButton, self.guideButton, self.strobeButton, self.deleteButton, self.saveButton, self.transferRetryButton]];
     stack.axis = UILayoutConstraintAxisHorizontal;
     stack.spacing = 4;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [panel.contentView addSubview:stack];
     self.cameraControlsBottomConstraint = [panel.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8];
     [NSLayoutConstraint activateConstraints:@[
+        [panel.widthAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-8],
         [panel.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
         self.cameraControlsBottomConstraint,
         [stack.leadingAnchor constraintEqualToAnchor:panel.contentView.leadingAnchor constant:8],
@@ -918,45 +926,45 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.tagButton.enabled = !recording && !playing && !self.finishingRecording;
     self.deleteButton.hidden = self.latestRecordingURL == nil;
     self.deleteButton.enabled = !recording && !self.finishingRecording && ![[WaterJumpCoordinator shared] protectsVideo:self.latestRecordingURL];
-    [self styleButton:self.deleteButton title:@"再生用動画を削除" symbol:@"trash" color:UIColor.systemRedColor];
+    [self styleButton:self.deleteButton title:MTJText(@"再生用動画を削除") symbol:@"trash" color:UIColor.systemRedColor];
     self.saveButton.hidden = !self.pendingRecordingURL;
     self.saveButton.enabled = !playing;
     self.guideButton.hidden = self.pendingRecordingURL != nil;
     self.guideButton.enabled = !playing;
     // 録画前でもボタンを操作できるようにし、動画がない場合はタップ時に案内する。
     self.strobeButton.enabled = !recording && !playing && !self.finishingRecording;
-    [self styleButton:self.strobeButton title:self.strobeEnabled ? @"ストロボOFF" : @"ストロボ" symbol:@"camera.aperture" color:self.strobeEnabled ? UIColor.systemOrangeColor : neutral];
+    [self styleButton:self.strobeButton title:self.strobeEnabled ? MTJText(@"ストロボOFF") : MTJText(@"ストロボ") symbol:@"camera.aperture" color:self.strobeEnabled ? UIColor.systemOrangeColor : neutral];
     self.strobeButton.accessibilityValue = self.strobeEnabled ? @"ON" : @"OFF";
     self.guideView.hidden = !self.guideEnabled || playing;
-    [self styleButton:self.recordButton title:recording ? @"録画停止" : @"録画開始" symbol:recording ? @"stop.fill" : @"record.circle" color:UIColor.systemRedColor];
+    [self styleButton:self.recordButton title:recording ? MTJText(@"録画停止") : MTJText(@"録画開始") symbol:recording ? @"stop.fill" : @"record.circle" color:UIColor.systemRedColor];
     self.recordButton.backgroundColor = [[UIColor colorWithRed:0.88 green:0.03 blue:0.03 alpha:1.0] colorWithAlphaComponent:0.82];
     self.recordButton.alpha = self.recordButton.enabled ? 0.98 : 0.35;
     if (self.finishingRecording) {
         [self.recordButton setImage:nil forState:UIControlStateNormal];
-        self.recordButton.accessibilityLabel = @"録画した動画を処理中";
+        self.recordButton.accessibilityLabel = MTJText(@"録画した動画を処理中");
         [self.recordingActivity startAnimating];
     } else {
         [self.recordingActivity stopAnimating];
     }
-    [self styleButton:self.playButton title:playing ? @"再生停止" : @"最新動画を再生" symbol:playing ? @"stop.fill" : @"play.fill" color:UIColor.systemBlueColor];
-    [self styleButton:self.skeletonButton title:self.isSkeletonDrawingEnabled ? @"骨格を非表示" : @"骨格を表示" symbol:@"figure.walk" color:self.isSkeletonDrawingEnabled ? [UIColor colorWithRed:0.08 green:0.45 blue:0.28 alpha:1] : neutral];
-    self.skeletonButton.accessibilityValue = self.isSkeletonDrawingEnabled ? @"表示中" : @"非表示";
+    [self styleButton:self.playButton title:playing ? MTJText(@"再生停止") : MTJText(@"最新動画を再生") symbol:playing ? @"stop.fill" : @"play.fill" color:UIColor.systemBlueColor];
+    [self styleButton:self.skeletonButton title:self.isSkeletonDrawingEnabled ? MTJText(@"骨格を非表示") : MTJText(@"骨格を表示") symbol:@"figure.walk" color:self.isSkeletonDrawingEnabled ? [UIColor colorWithRed:0.08 green:0.45 blue:0.28 alpha:1] : neutral];
+    self.skeletonButton.accessibilityValue = self.isSkeletonDrawingEnabled ? MTJText(@"表示中") : MTJText(@"非表示");
     UIColor *tagColor = self.tagMode == 1 ? UIColor.systemBlueColor : (self.tagMode == 2 ? UIColor.systemGreenColor : neutral);
-    [self styleButton:self.tagButton title:(self.tagMode == 1 ? @"録画停止後にタグ選択" : (self.tagMode == 2 ? @"既定タグを自動付与" : @"タグなし")) symbol:@"tag.fill" color:tagColor];
+    [self styleButton:self.tagButton title:(self.tagMode == 1 ? MTJText(@"録画停止後にタグ選択") : (self.tagMode == 2 ? MTJText(@"既定タグを自動付与") : MTJText(@"タグなし"))) symbol:@"tag.fill" color:tagColor];
     self.tagModeBadge.text = self.tagMode == 1 ? @"A" : (self.tagMode == 2 ? @"B" : nil);
     self.tagModeBadge.hidden = self.tagMode == 0;
     self.tagModeBadge.backgroundColor = tagColor;
-    self.tagButton.accessibilityValue = self.tagMode == 1 ? @"A: 録画停止後にタグ選択" : (self.tagMode == 2 ? @"B: 既定タグを自動付与" : @"タグなし");
-    [self styleButton:self.guideButton title:self.guideEnabled ? @"十字ガイドを非表示" : @"十字ガイドを表示" symbol:@"scope" color:self.guideEnabled ? UIColor.systemBlueColor : neutral];
-    self.guideButton.accessibilityValue = self.guideEnabled ? @"表示中" : @"非表示";
-    [self styleButton:self.saveButton title:@"保存先を選択" symbol:@"square.and.arrow.down" color:neutral];
+    self.tagButton.accessibilityValue = self.tagMode == 1 ? MTJText(@"A: 録画停止後にタグ選択") : (self.tagMode == 2 ? MTJText(@"B: 既定タグを自動付与") : MTJText(@"タグなし"));
+    [self styleButton:self.guideButton title:self.guideEnabled ? MTJText(@"十字ガイドを非表示") : MTJText(@"十字ガイドを表示") symbol:@"scope" color:self.guideEnabled ? UIColor.systemBlueColor : neutral];
+    self.guideButton.accessibilityValue = self.guideEnabled ? MTJText(@"表示中") : MTJText(@"非表示");
+    [self styleButton:self.saveButton title:MTJText(@"保存先を選択") symbol:@"square.and.arrow.down" color:neutral];
 }
 
 - (void)toggleStrobe:(id)sender {
     if (self.videoRecorder.isRecording || self.player || self.finishingRecording) return;
     NSURL *sourceURL = self.latestRecordingURL ?: self.pendingRecordingURL;
     if (!sourceURL || ![[NSFileManager defaultManager] fileExistsAtPath:sourceURL.path]) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"ストロボ画像" message:@"先に動画を録画してください。" preferredStyle:UIAlertControllerStyleAlert];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"ストロボ画像") message:MTJText(@"先に動画を録画してください。") preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil]; return;
     }
     self.strobeEnabled = !self.strobeEnabled;
@@ -973,14 +981,14 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if (!self.latestRecordingURL || self.videoRecorder.isRecording || self.finishingRecording) return;
     NSURL *url = self.latestRecordingURL;
     if ([[WaterJumpCoordinator shared] protectsVideo:url]) return;
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"再生用動画を削除しますか？" message:self.pendingRecordingURL ? @"未保存の動画を削除します。この操作は取り消せません。" : ([url.path containsString:@"/Documents/Recordings/"] ? @"この端末に保存した練習動画を削除します。この操作は取り消せません。転送済みの相手側動画は残ります。" : @"アプリ内の再生用動画を削除します。ダウンロードに保存済みの動画は残ります。") preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"再生用動画を削除しますか？") message:self.pendingRecordingURL ? MTJText(@"未保存の動画を削除します。この操作は取り消せません。") : ([url.path containsString:@"/Documents/Recordings/"] ? MTJText(@"この端末に保存した練習動画を削除します。この操作は取り消せません。転送済みの相手側動画は残ります。") : MTJText(@"アプリ内の再生用動画を削除します。ダウンロードに保存済みの動画は残ります。")) preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"削除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [self stopPlayback];
         NSError *error = nil;
         if ([[NSFileManager defaultManager] fileExistsAtPath:url.path] && ![[NSFileManager defaultManager] removeItemAtURL:url error:&error]) {
-            UIAlertController *failure = [UIAlertController alertControllerWithTitle:@"削除できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-            [failure addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+            UIAlertController *failure = [UIAlertController alertControllerWithTitle:MTJText(@"削除できませんでした") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            [failure addAction:[UIAlertAction actionWithTitle:MTJText(@"閉じる") style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:failure animated:YES completion:nil];
             return;
         }
@@ -1031,8 +1039,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.zoomInButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.zoomOutButton setImage:[UIImage systemImageNamed:@"minus.magnifyingglass"] forState:UIControlStateNormal];
     [self.zoomInButton setImage:[UIImage systemImageNamed:@"plus.magnifyingglass"] forState:UIControlStateNormal];
-    self.zoomOutButton.accessibilityLabel = @"ズームアウト";
-    self.zoomInButton.accessibilityLabel = @"ズームイン";
+    self.zoomOutButton.accessibilityLabel = MTJText(@"ズームアウト");
+    self.zoomInButton.accessibilityLabel = MTJText(@"ズームイン");
     [self.zoomOutButton addTarget:self action:@selector(zoomOut:) forControlEvents:UIControlEventTouchUpInside];
     [self.zoomInButton addTarget:self action:@selector(zoomIn:) forControlEvents:UIControlEventTouchUpInside];
     for (UIButton *button in @[self.zoomOutButton, self.zoomInButton]) {
@@ -1044,7 +1052,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.zoomLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
     self.zoomLabel.textColor = UIColor.whiteColor;
     self.zoomLabel.textAlignment = NSTextAlignmentCenter;
-    self.zoomLabel.accessibilityLabel = @"ズーム倍率";
+    self.zoomLabel.accessibilityLabel = MTJText(@"ズーム倍率");
     [self.zoomLabel.widthAnchor constraintGreaterThanOrEqualToConstant:52].active = YES;
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[self.zoomOutButton, self.zoomLabel, self.zoomInButton]];
     row.alignment = UIStackViewAlignmentCenter;
@@ -1081,7 +1089,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
             UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
             button.tag = lround(value.doubleValue * 10);
             [button setTitle:[NSString stringWithFormat:@"%g", value.doubleValue] forState:UIControlStateNormal];
-            button.accessibilityLabel = [NSString stringWithFormat:@"%g倍にズーム", value.doubleValue];
+            button.accessibilityLabel = [NSString stringWithFormat:MTJText(@"%g倍にズーム"), value.doubleValue];
             [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
             button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
             button.layer.cornerRadius = 20;
@@ -1100,7 +1108,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     for (UIButton *button in self.zoomPresetsRow.arrangedSubviews) {
         button.selected = fabs(self.requestedZoom - button.tag / 10.0) < 0.05;
         button.backgroundColor = button.selected ? [UIColor.systemBlueColor colorWithAlphaComponent:0.3] : [UIColor colorWithWhite:0 alpha:0.12];
-        button.accessibilityValue = button.selected ? @"選択中" : nil;
+        button.accessibilityValue = button.selected ? MTJText(@"選択中") : nil;
     }
     self.zoomPinch.enabled = available && maximum > minimum;
     self.zoomOutButton.enabled = available && self.requestedZoom > minimum + 0.01;
@@ -1121,7 +1129,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.requestedZoom = actual;
         [self updateZoomControls];
         if (error && !self.presentedViewController) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"ズームを変更できませんでした" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"ズームを変更できませんでした") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [self presentViewController:alert animated:YES completion:nil];
         }
@@ -1174,7 +1182,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)playbackFailed:(NSNotification *)notification {
     [self stopPlayback];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"再生できませんでした" message:@"動画を読み込めませんでした。もう一度お試しください。" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"再生できませんでした") message:MTJText(@"動画を読み込めませんでした。もう一度お試しください。") preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     if (!self.presentedViewController) [self presentViewController:alert animated:YES completion:nil];
 }
@@ -1228,7 +1236,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.positionSlider = [[PlaybackSlider alloc] init];
     self.positionSlider.minimumValue = 0;
     self.positionSlider.maximumValue = 1;
-    self.positionSlider.accessibilityLabel = @"再生位置";
+    self.positionSlider.accessibilityLabel = MTJText(@"再生位置");
     [self.positionSlider addTarget:self action:@selector(beginScrubbing) forControlEvents:UIControlEventEditingDidBegin];
     [self.positionSlider addTarget:self action:@selector(positionChanged:) forControlEvents:UIControlEventValueChanged];
     [self.positionSlider addTarget:self action:@selector(endScrubbing) forControlEvents:UIControlEventEditingDidEnd];
@@ -1239,7 +1247,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.speedSlider.minimumValue = 0.25;
     self.speedSlider.maximumValue = 2.0;
     self.speedSlider.value = self.playbackSpeed;
-    self.speedSlider.accessibilityLabel = @"再生速度";
+    self.speedSlider.accessibilityLabel = MTJText(@"再生速度");
     [self.speedSlider addTarget:self action:@selector(speedChanged:) forControlEvents:UIControlEventValueChanged];
     UILabel *slow = [self playbackLabel]; slow.text = @"0.25×";
     self.speedLabel = [self playbackLabel];
@@ -1253,12 +1261,12 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
     [self.positionSlider.heightAnchor constraintEqualToConstant:44].active = YES;
     [self.speedSlider.heightAnchor constraintEqualToConstant:44].active = YES;
-    self.loopStartButton = [self playbackFeatureButtonWithSymbol:@"a.circle" action:@selector(setLoopStart:) label:@"A点を設定"];
-    self.loopEndButton = [self playbackFeatureButtonWithSymbol:@"b.circle" action:@selector(setLoopEnd:) label:@"B点を設定"];
-    self.loopButton = [self playbackFeatureButtonWithSymbol:@"repeat" action:@selector(toggleLoop:) label:@"A-Bリピート"];
-    self.frameStepButton = [self playbackFeatureButtonWithSymbol:@"forward.frame" action:@selector(stepOneFrame:) label:@"1フレーム進む"];
-    self.mirrorButton = [self playbackFeatureButtonWithSymbol:@"arrow.left.and.right.righttriangle.left.righttriangle.right" action:@selector(toggleMirror:) label:@"左右反転"];
-    self.takeoffButton = [self playbackFeatureButtonWithSymbol:@"figure.skiing.downhill" action:@selector(toggleLocalTakeoff:) label:@"Takeoff解析設定"];
+    self.loopStartButton = [self playbackFeatureButtonWithSymbol:@"a.circle" action:@selector(setLoopStart:) label:MTJText(@"A点を設定")];
+    self.loopEndButton = [self playbackFeatureButtonWithSymbol:@"b.circle" action:@selector(setLoopEnd:) label:MTJText(@"B点を設定")];
+    self.loopButton = [self playbackFeatureButtonWithSymbol:@"repeat" action:@selector(toggleLoop:) label:MTJText(@"A-Bリピート")];
+    self.frameStepButton = [self playbackFeatureButtonWithSymbol:@"forward.frame" action:@selector(stepOneFrame:) label:MTJText(@"1フレーム進む")];
+    self.mirrorButton = [self playbackFeatureButtonWithSymbol:@"arrow.left.and.right.righttriangle.left.righttriangle.right" action:@selector(toggleMirror:) label:MTJText(@"左右反転")];
+    self.takeoffButton = [self playbackFeatureButtonWithSymbol:@"figure.skiing.downhill" action:@selector(toggleLocalTakeoff:) label:MTJText(@"Takeoff解析設定")];
     UIStackView *features = [[UIStackView alloc] initWithArrangedSubviews:@[self.loopStartButton, self.loopEndButton, self.loopButton, self.frameStepButton, self.mirrorButton, self.takeoffButton]];
     features.axis = UILayoutConstraintAxisHorizontal;
     features.alignment = UIStackViewAlignmentCenter;
@@ -1357,8 +1365,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)refreshPlaybackFeatureButtons {
-    self.loopStartButton.accessibilityValue = CMTIME_IS_VALID(self.loopStartTime) ? [NSString stringWithFormat:@"A %.2f秒", CMTimeGetSeconds(self.loopStartTime)] : @"未設定";
-    self.loopEndButton.accessibilityValue = CMTIME_IS_VALID(self.loopEndTime) ? [NSString stringWithFormat:@"B %.2f秒", CMTimeGetSeconds(self.loopEndTime)] : @"未設定";
+    self.loopStartButton.accessibilityValue = CMTIME_IS_VALID(self.loopStartTime) ? [NSString stringWithFormat:MTJText(@"A %.2f秒"), CMTimeGetSeconds(self.loopStartTime)] : MTJText(@"未設定");
+    self.loopEndButton.accessibilityValue = CMTIME_IS_VALID(self.loopEndTime) ? [NSString stringWithFormat:MTJText(@"B %.2f秒"), CMTimeGetSeconds(self.loopEndTime)] : MTJText(@"未設定");
     self.loopButton.selected = self.loopEnabled;
     self.loopButton.backgroundColor = self.loopEnabled ? [UIColor.systemBlueColor colorWithAlphaComponent:0.5] : [UIColor colorWithWhite:0 alpha:0.25];
     self.mirrorButton.selected = self.mirroredPlayback;
@@ -1448,6 +1456,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    MTJLocalizeView(self.view);
     self.videoRecorder.previewLayer.frame = self.previewView.bounds;
     self.drawingLayer.frame = self.previewView.bounds;
     self.playerLayer.frame = self.playbackView.bounds;

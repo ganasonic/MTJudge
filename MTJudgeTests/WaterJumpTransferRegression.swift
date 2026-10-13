@@ -60,12 +60,15 @@ import Network
         return result
     }
     static func main() throws {
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("WJ") { UserDefaults.standard.removeObject(forKey:key) }
+        PeerDiscoveryManager.testKeychainService = "MTJudge.TransferRegression." + UUID().uuidString
         let root = URL(fileURLWithPath:NSTemporaryDirectory()).appendingPathComponent("MTJudge-WJ-tests-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         ReceivedVideoManager.testDirectory = root.appendingPathComponent("Recordings")
         let source = root.appendingPathComponent("source.mov"); try movie(source)
         let id = UUID().uuidString
-        let info = try ReceivedVideoManager.metadata(source,id:id,tags:[["category":"場所","id":"test-tag","name":"S-Air"]])
+        var info = try ReceivedVideoManager.metadata(source,id:id,tags:[["category":"場所","id":"test-tag","name":"S-Air"]])
+        info["filename"] = id + ".mov"
         let data = try Data(contentsOf:source)
         let key = Data(repeating:0x42,count:32).base64EncodedString()
         let listener = try NWListener(using:PeerDiscoveryManager.parameters(key)!,on:.any)
@@ -89,7 +92,7 @@ import Network
         var corrupt = info; corrupt["id"] = UUID().uuidString; corrupt["sha256"] = String(repeating:"0",count:64)
         require(upload(listener,key:key,info:corrupt,data:data)["error"] != nil,"hash mismatch rejected")
         require(ReceivedVideoManager.videos().count == 1,"corrupted file not registered")
-        var interrupted = info; interrupted["id"] = UUID().uuidString
+        var interrupted = info; interrupted["id"] = UUID().uuidString; interrupted["filename"] = (interrupted["id"] as! String) + ".mov"
         _ = upload(listener,key:key,info:interrupted,data:data,disconnect:true)
         Thread.sleep(forTimeInterval:1)
         require(FileManager.default.fileExists(atPath:source.path),"disconnect preserves sender original")
@@ -99,11 +102,29 @@ import Network
         require(upload(listener,key:wrongKey,info:info,data:data)["error"] != nil,"unregistered TLS key rejected")
         var traversal = info; traversal["id"] = "../../escape"
         require(upload(listener,key:key,info:traversal,data:data)["error"] != nil,"path traversal rejected")
+        let d = UserDefaults.standard
+        let groupA = UUID().uuidString, mainID = UUID().uuidString
+        d.set("automatic",forKey:"WJConnectionMode"); d.set(groupA,forKey:"WJCameraGroupID"); d.set([mainID],forKey:"WJGroupAllowedSenders")
+        var grouped = info; grouped["groupID"] = UUID().uuidString; grouped["senderID"] = mainID
+        require(upload(listener,key:key,info:grouped,data:data)["error"] != nil,"A receiver rejects D group even with valid TLS key")
+        grouped["groupID"] = groupA; grouped["senderID"] = UUID().uuidString
+        require(upload(listener,key:key,info:grouped,data:data)["error"] != nil,"extra receiver rejects non-main sender")
+        grouped["senderID"] = mainID
+        require(upload(listener,key:key,info:grouped,data:data)["state"] as? String == "TRANSFERRED","authorized main sender accepted in matching group")
+        d.removeObject(forKey:"WJConnectionMode"); d.removeObject(forKey:"WJCameraGroupID"); d.removeObject(forKey:"WJGroupAllowedSenders")
+        let different = root.appendingPathComponent("different.mov")
+        try (data + Data(repeating:0,count:8)).write(to:different)
+        var collision = try ReceivedVideoManager.metadata(different,id:UUID().uuidString,tags:[])
+        collision["filename"] = id + ".mov"
+        let collisionURL = try ReceivedVideoManager.commit(different,metadata:collision)
+        require(collisionURL != destination && FileManager.default.fileExists(atPath:collisionURL.path),"same filename with different content creates a real renamed movie")
+        let collisionHash = try ReceivedVideoManager.digest(collisionURL)
+        require(collisionHash == collision["sha256"] as? String,"renamed movie retains complete bytes")
         listener.cancel()
         VideoTransferManager.testQueueURL = root.appendingPathComponent("queue.json")
-        var queued = info; queued["id"] = UUID().uuidString; queued["transferRequested"] = true; queued["created"] = 1
+        var queued = info; queued["id"] = UUID().uuidString; queued["transferRequested"] = true; queued["created"] = 1; queued["filename"] = (queued["id"] as! String) + ".mov"
         let queuedURL = try ReceivedVideoManager.commit(source,metadata:queued)
-        var second = queued; second["id"] = UUID().uuidString; second["created"] = 2
+        var second = queued; second["id"] = UUID().uuidString; second["created"] = 2; second["filename"] = (second["id"] as! String) + ".mov"
         _ = try ReceivedVideoManager.commit(source,metadata:second)
         let manager = VideoTransferManager()
         require(manager.pendingCount == 2,"restart reconstructs two queued recordings")

@@ -7,6 +7,7 @@
 //
 
 #import "AppDelegate.h"
+#import "MTJLocalization.h"
 #import "WaterJump/WaterJumpCoordinator.h"
 #import <objc/runtime.h>
 
@@ -28,6 +29,7 @@ static const void *MTJudgeLastResponsiveSizeKey = &MTJudgeLastResponsiveSizeKey;
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
+    MTJLocalizeView(self);
     CGFloat offset = MAX(0, self.safeAreaInsets.top - 20.0);
     CGFloat delta = offset - self.appliedTopOffset;
     if (fabs(delta) >= 0.01) {
@@ -85,6 +87,19 @@ static const void *MTJudgeLastResponsiveSizeKey = &MTJudgeLastResponsiveSizeKey;
 
 @implementation AppDelegate
 
+
+// Only comparison playback opts into rotation; legacy screens and camera stay portrait.
+- (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    UIViewController *controller = window.rootViewController;
+    while (controller && !controller.isBeingDismissed) {
+        if ([controller isKindOfClass:NSClassFromString(@"WaterJumpComparisonViewController")]) return UIInterfaceOrientationMaskAllButUpsideDown;
+        if (controller.presentedViewController && !controller.presentedViewController.isBeingDismissed) controller = controller.presentedViewController;
+        else if ([controller isKindOfClass:UINavigationController.class]) controller = [(UINavigationController *)controller visibleViewController];
+        else if ([controller isKindOfClass:UITabBarController.class]) controller = [(UITabBarController *)controller selectedViewController];
+        else break;
+    }
+    return UIInterfaceOrientationMaskPortrait;
+}
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     // UIの生成はSceneDelegateで行う。ここではアプリ全体の初期設定だけを行う。

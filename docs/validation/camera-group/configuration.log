@@ -1,0 +1,21 @@
+PASS: Japanese/emoji Bonjour name stays within byte limit
+PASS: create main group without URL entry
+PASS: full unique group ID retained
+PASS: main role and automatic mode persisted
+PASS: main simultaneously records, receives and forwards
+PASS: new manager restores group and role from shared settings
+PASS: busy reset rejected without modifying group
+PASS: busy group change rejected
+PASS: group can be replaced
+PASS: replacement invalidates old group and queue generation
+PASS: old communication targets cleared
+PASS: explicit member removal frees occupied role
+PASS: manual mode explicitly disables automatic membership
+PASS: idle communication reset succeeds
+PASS: reset clears membership and communication toggles
+PASS: reset preserves camera preferences and user tags
+PASS: reset preserves file bytes: keep.MOV
+PASS: reset preserves file bytes: keep.MOV.tags.json
+PASS: reset preserves file bytes: keep.MOV.drawing.json
+PASS: reset preserves file bytes: keep.MOV.wj.json
+ALL GROUP CONFIGURATION TESTS PASSED; artifacts: /var/folders/8p/19w69j2s4cz2ccw_rc3z1d4r0000gn/T/MTJudge-group-regression-2CA778D7-D985-4CF8-9D29-A68D99EFC6CF

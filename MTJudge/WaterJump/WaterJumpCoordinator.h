@@ -1,9 +1,12 @@
 #import <Foundation/Foundation.h>
-@class RecordingController;
+@class RecordingController, CameraGroupManager;
 extern NSString * const WJStatusChanged;
 @interface WaterJumpCoordinator : NSObject
 + (instancetype)shared;
 @property (nonatomic, weak) RecordingController *recording;
+@property (nonatomic, readonly) CameraGroupManager *group;
+@property (nonatomic, readonly) BOOL communicationBusy;
+@property (nonatomic, readonly) BOOL transferNeedsRetry;
 @property (nonatomic, readonly) BOOL modeEnabled;
 @property (nonatomic, readonly) NSString *remoteAddress;
 @property (nonatomic, copy) NSString *message;

@@ -1,3 +1,4 @@
+#import "MTJLocalization.h"
 //
 //  FirstViewController.m
 //  MTJudge
@@ -68,9 +69,9 @@ NSString *levelStr[] = {
     
     f_uppderbody = f_carving = f_absorption = 0.0;
     
-    _lblUpperbody.text = levelStr[0];
-    _lblCarving.text = levelStr[0];
-    _lblAbsorption.text = levelStr[0];
+    _lblUpperbody.text = MTJText(levelStr[0]);
+    _lblCarving.text = MTJText(levelStr[0]);
+    _lblAbsorption.text = MTJText(levelStr[0]);
     [self summaryBasepoint];
     [self drawLevelBar];
 }
@@ -128,7 +129,7 @@ NSString *levelStr[] = {
     }else if (16.1<=level && level<=20.0) {
         index = 5;
     }
-    return levelStr[index];
+    return MTJText(levelStr[index]);
 }
 
 -(NSString *)getCurrentLevelCarving :(float) level{

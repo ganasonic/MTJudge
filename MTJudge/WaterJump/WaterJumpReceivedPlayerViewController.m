@@ -95,6 +95,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, assign) BOOL drawingEnabled;
 @property (nonatomic, copy) NSString *tool;
 @property (nonatomic, copy) NSString *drawingText;
+@property (nonatomic) BOOL textReversed;
 @property (nonatomic, strong) UIColor *foregroundColor;
 @property (nonatomic, strong) UIColor *backgroundColorForDrawing;
 @property (nonatomic, copy) void (^commitBlock)(NSArray<NSValue *> *points);
@@ -177,7 +178,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
     else if ([tool isEqualToString:@"文字"]) {
         NSString *text = item[@"text"] ?: @"";
-        if ([text isEqualToString:@"👍"] || [text isEqualToString:@"👎"]) { [text drawAtPoint:first withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:28], NSForegroundColorAttributeName:color}]; return; }
+        if ([text isEqualToString:@"👍"] || [text isEqualToString:@"👎"]) { if ([item[@"textReversed"] boolValue]) [self drawReversedText:text atPoint:first color:color inContext:ctx]; else [text drawAtPoint:first withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:28], NSForegroundColorAttributeName:color}]; return; }
         UIFont *font = [UIFont boldSystemFontOfSize:22];
         CGSize textSize = [text sizeWithAttributes:@{NSFontAttributeName:font}];
         CGFloat dx = last.x - first.x, dy = last.y - first.y;
@@ -187,7 +188,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         CGFloat arrowAngle = atan2(connect.y-first.y, connect.x-first.x), arrowSize = 12;
         CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x + arrowSize*cos(arrowAngle-M_PI/6), first.y + arrowSize*sin(arrowAngle-M_PI/6));
         CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x + arrowSize*cos(arrowAngle+M_PI/6), first.y + arrowSize*sin(arrowAngle+M_PI/6)); CGContextStrokePath(ctx);
-        [text drawAtPoint:origin withAttributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:color}];
+        if ([item[@"textReversed"] boolValue]) [self drawReversedText:text atPoint:origin color:color inContext:ctx];
+        else [text drawAtPoint:origin withAttributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:color}];
     } else { CGContextMoveToPoint(ctx, first.x, first.y); for (NSValue *v in points) CGContextAddLineToPoint(ctx, v.CGPointValue.x, v.CGPointValue.y); CGContextStrokePath(ctx); if ([tool isEqualToString:@"矢印"] && points.count > 1) { CGFloat angle = atan2(last.y-first.y, last.x-first.x), size = 12; CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+size*cos(angle-M_PI/6), first.y+size*sin(angle-M_PI/6)); CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+size*cos(angle+M_PI/6), first.y+size*sin(angle+M_PI/6)); CGContextStrokePath(ctx); } }
 }
 - (void)drawPreviewInContext:(CGContextRef)ctx {
@@ -199,7 +201,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if ([tool isEqualToString:@"文字"]) {
         if (_activePoints.count > 1) {
             NSString *text = self.drawingText ?: @""; UIFont *font = [UIFont boldSystemFontOfSize:22]; CGSize textSize = [text sizeWithAttributes:@{NSFontAttributeName:font}];
-            if ([text isEqualToString:@"👍"] || [text isEqualToString:@"👎"]) { [text drawAtPoint:first withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:28], NSForegroundColorAttributeName:self.foregroundColor}]; return; }
+            if ([text isEqualToString:@"👍"] || [text isEqualToString:@"👎"]) { if (self.textReversed) [self drawReversedText:text atPoint:first color:self.foregroundColor inContext:ctx]; else [text drawAtPoint:first withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:28], NSForegroundColorAttributeName:self.foregroundColor}]; return; }
             CGFloat dx = last.x-first.x, dy = last.y-first.y;
             CGPoint origin = CGPointMake(dx >= 0 ? last.x : last.x-textSize.width, dy >= 0 ? last.y : last.y-textSize.height);
             CGPoint connect = CGPointMake(dx >= 0 ? origin.x : origin.x+textSize.width, dy >= 0 ? origin.y : origin.y+textSize.height);
@@ -207,7 +209,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
             CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, connect.x, connect.y);
             CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+s*cos(a-M_PI/6), first.y+s*sin(a-M_PI/6));
             CGContextMoveToPoint(ctx, first.x, first.y); CGContextAddLineToPoint(ctx, first.x+s*cos(a+M_PI/6), first.y+s*sin(a+M_PI/6)); CGContextStrokePath(ctx);
-            if (text.length) [text drawAtPoint:origin withAttributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:self.foregroundColor}];
+            if (self.textReversed) [self drawReversedText:text atPoint:origin color:self.foregroundColor inContext:ctx];
+            else if (text.length) [text drawAtPoint:origin withAttributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:self.foregroundColor}];
         }
         return;
     }
@@ -317,7 +320,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UIButton *drawingButton;
 @property (nonatomic, strong) WJDrawingCanvas *drawingCanvas;
 @property (nonatomic, strong) UIView *drawingPalette;
-@property (nonatomic, strong) UIView *drawingTextPalette;
+@property (nonatomic, strong) UIScrollView *drawingTextPalette;
+@property (nonatomic) BOOL drawingTextReversed;
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *drawingAnnotations;
 @property (nonatomic, assign) BOOL drawingMode;
 @property (nonatomic, assign) CMTime drawingModeStartTime;
@@ -355,6 +359,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshFavoriteState) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshFavoriteState) name:@"WJVideoFavoritesChanged" object:nil];
     // iPadの既定のページシート変換を避け、受信動画は常に画面全体へ表示する。
     self.modalPresentationStyle = UIModalPresentationFullScreen;
     self.modalPresentationCapturesStatusBarAppearance = YES;
@@ -416,6 +422,9 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     // contentOverlayViewがsafe areaだけのサイズになる環境でも、Player全体を覆う。
     self.contentOverlayView.frame = self.view.bounds;
     if (self.drawingCanvas && self.speedControlHost) self.drawingCanvas.frame = self.speedControlHost.bounds;
+    [self layoutDrawingTextPalette];
+    [self updatePersonAnglesForCurrentRamp];
+    [self.drawingCanvas setNeedsDisplay];
     [self updateRotationHandlePosition];
 }
 
@@ -629,7 +638,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:AVPlayerItemDidPlayToEndTimeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self.speedHideTimer invalidate];
     if (self.playbackTimeObserver) [self.player removeTimeObserver:self.playbackTimeObserver];
 }
@@ -906,6 +915,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [undo setTitle:nil forState:UIControlStateNormal];
     undo.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
     [undo setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    undo.tintColor = UIColor.whiteColor;
     undo.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
     undo.layer.cornerRadius = 6;
     [undo addTarget:self action:@selector(undoDrawing:) forControlEvents:UIControlEventTouchUpInside];
@@ -917,6 +927,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     clear.accessibilityLabel = @"カテゴリの描画を削除";
     clear.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
     [clear setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
+    clear.tintColor = UIColor.whiteColor;
     clear.backgroundColor = [UIColor colorWithWhite:1 alpha:.14];
     clear.layer.cornerRadius = 6;
     [clear addTarget:self action:@selector(clearDrawingCategory:) forControlEvents:UIControlEventTouchUpInside];
@@ -925,12 +936,18 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self.drawingPalette addGestureRecognizer:pan];
     [self refreshDrawingPaletteState];
     // 「文字」選択時だけ、左側パレットの反対側に表示する専用ボタン群。
-    self.drawingTextPalette = [[UIView alloc] initWithFrame:CGRectMake(host.bounds.size.width - 138, 120, 130, 430)];
+    self.drawingTextPalette = [[UIScrollView alloc] initWithFrame:CGRectMake(host.bounds.size.width - 138, 120, 130, 430)];
+    self.drawingTextPalette.alwaysBounceVertical = YES;
+    self.drawingTextPalette.clipsToBounds = YES;
     self.drawingTextPalette.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
     self.drawingTextPalette.backgroundColor = [UIColor colorWithWhite:0 alpha:.55];
     self.drawingTextPalette.layer.cornerRadius = 10;
     self.drawingTextPalette.hidden = YES;
     [host addSubview:self.drawingTextPalette];
+    [self rebuildDrawingTextPalette];
+}
+- (void)rebuildDrawingTextPalette {
+    for (UIView *view in self.drawingTextPalette.subviews.copy) if ([view isKindOfClass:UIButton.class]) [view removeFromSuperview];
     NSArray *textOptions = self.customDrawingTexts ?: [self defaultDrawingTextOptions];
     for (NSUInteger i = 0; i < textOptions.count; i++) {
         NSString *value = textOptions[i];
@@ -945,32 +962,72 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         button.accessibilityIdentifier = value;
         [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
         [button addTarget:self action:@selector(selectDrawingTextButton:) forControlEvents:UIControlEventTouchUpInside];
+        if (![value isEqualToString:@"⌨"]) {
+            UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectReversedDrawingText:)];
+            press.minimumPressDuration = .5;
+            press.cancelsTouchesInView = YES;
+            [button addGestureRecognizer:press];
+        }
         [self.drawingTextPalette addSubview:button];
     }
+    self.drawingTextPalette.contentSize = CGSizeMake(130, 12 + textOptions.count * 36.0);
+    [self layoutDrawingTextPalette];
+}
+- (void)layoutDrawingTextPalette {
+    UIView *host = self.drawingTextPalette.superview;
+    if (!host) return;
+    CGRect safe = UIEdgeInsetsInsetRect(host.bounds, host.safeAreaInsets);
+    CGFloat top = MAX(CGRectGetMinY(safe) + 8, 120);
+    CGFloat height = MIN(self.drawingTextPalette.contentSize.height, MAX(36, CGRectGetMaxY(safe) - top - 100));
+    self.drawingTextPalette.frame = CGRectMake(CGRectGetMaxX(safe) - 138, top, 130, height);
+}
+- (void)selectReversedDrawingText:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan || ![self.drawingTool isEqualToString:@"文字"]) return;
+    UIButton *button = (UIButton *)gesture.view;
+    self.drawingText = button.accessibilityIdentifier;
+    self.drawingTextReversed = YES;
+    [self refreshDrawingPaletteState];
+    self.drawingTextPalette.hidden = YES;
 }
 - (void)clearDrawingCategory:(id)sender {
     NSString *category = self.drawingCategory ?: @"汎用";
     NSIndexSet *indexes = [self.drawingAnnotations indexesOfObjectsPassingTest:^BOOL(NSDictionary *obj, NSUInteger idx, BOOL *stop) { return [obj[@"category"] isEqualToString:category]; }];
     [self.drawingAnnotations removeObjectsAtIndexes:indexes];
+    [self updatePersonAnglesForCurrentRamp];
     self.drawingCanvas.annotations = self.drawingAnnotations;
     [self saveDrawingAnnotations];
 }
 - (void)undoDrawing:(id)sender {
     if (!self.drawingMode || self.drawingAnnotations.count <= self.drawingModeInitialAnnotationCount) return;
     [self.drawingAnnotations removeLastObject];
+    [self updatePersonAnglesForCurrentRamp];
     self.activeDrawingAnnotation = nil;
     self.drawingCanvas.annotations = self.drawingAnnotations;
     [self updateRotationHandlePosition];
     [self saveDrawingAnnotations];
 }
+- (void)updateDrawingControlVisibility {
+    self.shareButton.hidden = self.drawingMode;
+    self.exportButton.hidden = self.drawingMode;
+    self.closeButton.hidden = self.drawingMode;
+    self.favoriteIndicator.hidden = self.drawingMode || !self.favorite;
+    if (self.drawingMode) {
+        self.deleteButton.hidden = YES;
+        self.favoriteButton.hidden = YES;
+        self.infoButton.hidden = YES;
+        self.featureControlContainer.hidden = YES;
+        self.compareButton.hidden = YES;
+    } else {
+        self.compareButton.hidden = NO;
+    }
+}
 - (void)refreshDrawingPaletteState {
     // パレットで選択した描画種別を実際の入力キャンバスへ同期する。
     self.drawingCanvas.tool = self.drawingTool ?: @"直線";
     self.drawingTextPalette.hidden = !(self.drawingMode && [self.drawingTool isEqualToString:@"文字"]);
-    BOOL textMenuVisible = self.drawingMode && [self.drawingTool isEqualToString:@"文字"];
-    self.shareButton.hidden = textMenuVisible;
-    self.exportButton.hidden = textMenuVisible;
+    [self updateDrawingControlVisibility];
     self.drawingCanvas.drawingText = self.drawingText ?: @"";
+    self.drawingCanvas.textReversed = self.drawingTextReversed;
     self.drawingCanvas.foregroundColor = self.drawingForegroundColor ?: UIColor.greenColor;
     self.drawingCanvas.backgroundColorForDrawing = self.drawingBackgroundColor ?: UIColor.clearColor;
     BOOL shape = [self.drawingTool isEqualToString:@"楕円"] || [self.drawingTool isEqualToString:@"四角"] || [self.drawingTool isEqualToString:@"三角"];
@@ -994,7 +1051,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
                 [button setImage:[UIImage systemImageNamed:symbols[index]] forState:UIControlStateNormal];
                 [button setTitle:nil forState:UIControlStateNormal];
                 button.accessibilityLabel = [NSString stringWithFormat:@"%@メニュー（現在 %@）", title, value];
-                if (index == 2) button.tintColor = self.drawingForegroundColor ?: UIColor.greenColor;
+                button.tintColor = index == 0 ? UIColor.systemBlueColor : (index == 2 ? (self.drawingForegroundColor ?: UIColor.greenColor) : UIColor.whiteColor);
             }
         }
         if (button.tag == 2) { button.enabled = !lineOnlyCategory; button.alpha = lineOnlyCategory ? .35 : 1.0; }
@@ -1024,6 +1081,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         else if ([category isEqualToString:@"その他"] || !category.length) copy[@"category"] = @"汎用";
         [self.drawingAnnotations addObject:copy];
     }
+    [self updatePersonAnglesForCurrentRamp];
     self.drawingCanvas.hidden = self.drawingAnnotations.count == 0;
     self.drawingCanvas.annotations = self.drawingAnnotations;
     self.drawingCanvas.currentTime = self.player.currentTime;
@@ -1119,6 +1177,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
     double startTime = CMTimeGetSeconds(self.drawingModeStartTime); if (!isfinite(startTime)) startTime = 0;
     NSMutableDictionary *item = [@{ @"tool": tool, @"category": self.drawingCategory ?: @"汎用", @"style": self.drawingLineStyle ?: @"実線", @"points": normalized, @"start": @(startTime), @"end": [NSNull null], @"width": @3.0, @"text": self.drawingText ?: @"" } mutableCopy];
+    if ([tool isEqualToString:@"文字"]) item[@"textReversed"] = @(self.drawingTextReversed);
     [item addEntriesFromDictionary:[self colorComponents:self.drawingForegroundColor background:NO]];
     [item addEntriesFromDictionary:[self colorComponents:self.drawingBackgroundColor background:YES]];
     if ([self.drawingCategory isEqualToString:@"基準"] && normalized.count >= 2) {
@@ -1142,21 +1201,31 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 - (void)updatePersonAnglesForCurrentRamp {
     NSDictionary *ramp = nil;
-    for (NSDictionary *item in self.drawingAnnotations) if ([item[@"category"] isEqualToString:@"基準"]) { ramp = item; break; }
-    if (!ramp) return;
-    NSArray *rampPoints = ramp[@"points"]; if (rampPoints.count < 2) return;
-    NSArray *r0 = rampPoints.firstObject, *r1 = rampPoints.lastObject;
-    CGFloat rx = [r1[0] doubleValue] - [r0[0] doubleValue], ry = [r1[1] doubleValue] - [r0[1] doubleValue];
+    for (NSDictionary *item in self.drawingAnnotations) if ([item[@"category"] isEqualToString:@"基準"] && [item[@"tool"] isEqualToString:@"直線"]) { ramp = item; break; }
+    NSArray *rampPoints = ramp[@"points"];
+    CGSize size = self.drawingCanvas.bounds.size;
+    if (size.width <= 0 || size.height <= 0) return;
+    CGFloat rx = 0, ry = 0;
+    if (rampPoints.count >= 2) {
+        NSArray *r0 = rampPoints.firstObject, *r1 = rampPoints.lastObject;
+        rx = ([r1[0] doubleValue] - [r0[0] doubleValue]) * size.width;
+        ry = ([r1[1] doubleValue] - [r0[1] doubleValue]) * size.height;
+        // UIKitでは上側が小さいy。両線を下端→上端へ揃え、描いた順序に依存させない。
+        // 水平線には上端がないため、右端を選ぶ。
+        if (ry > 0 || (ry == 0 && rx < 0)) { rx = -rx; ry = -ry; }
+    }
     CGFloat rampLength = hypot(rx, ry);
     for (NSMutableDictionary *item in self.drawingAnnotations) if ([item[@"category"] isEqualToString:@"対象"] && [item[@"tool"] isEqualToString:@"直線"]) {
+        [item removeObjectForKey:@"angle"];
         NSArray *points = item[@"points"]; if (points.count < 2) continue;
         NSArray *p0 = points.firstObject, *p1 = points.lastObject;
-        CGFloat tx = [p1[0] doubleValue]-[p0[0] doubleValue], ty = [p1[1] doubleValue]-[p0[1] doubleValue];
+        CGFloat tx = ([p1[0] doubleValue] - [p0[0] doubleValue]) * size.width;
+        CGFloat ty = ([p1[1] doubleValue] - [p0[1] doubleValue]) * size.height;
+        if (ty > 0 || (ty == 0 && tx < 0)) { tx = -tx; ty = -ty; }
         CGFloat targetLength = hypot(tx, ty);
         if (rampLength > 0.0001 && targetLength > 0.0001) {
-            CGFloat cosine = fabs((rx * tx + ry * ty) / (rampLength * targetLength));
-            cosine = MAX(0.0, MIN(1.0, cosine));
-            item[@"angle"] = @(acos(cosine) * 180.0 / M_PI);
+            CGFloat cosine = (rx * tx + ry * ty) / (rampLength * targetLength);
+            item[@"angle"] = @(acos(MAX(-1.0, MIN(1.0, cosine))) * 180.0 / M_PI);
         }
     }
 }
@@ -1238,7 +1307,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext(); UIGraphicsEndImageContext(); return image;
 }
 - (NSString *)drawingToolGlyph:(NSString *)tool {
-    NSDictionary *glyphs=@{@"文字":@"𝑇", @"直線":@"━━━━", @"矢印":@"━━▶", @"丸":@"●", @"軸1":@"◉¹", @"軸2":@"◉²", @"軸3D":@"◉³ᴰ", @"楕円":@"⬭", @"四角":@"■", @"三角":@"▲", @"x":@"✕", @"角度":@"∠", @"軌道":@"⌁", @"フリー":@"〰"};
+    NSDictionary *glyphs=@{@"文字":@"𝑇", @"直線":@"━━━━", @"矢印":@"━━▶", @"丸":@"●", @"軸1":@"◉¹", @"軸2":@"◉²", @"軸3D":@"◉³ᴰ", @"楕円":@"⬭", @"四角":@"■", @"三角":@"▲", @"x":@"＋", @"角度":@"∠", @"軌道":@"⌁", @"フリー":@"〰"};
     return glyphs[tool] ?: @"";
 }
 - (NSString *)drawingToolDisplayName:(NSString *)tool {
@@ -1250,8 +1319,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)drawingToolMenu:(id)sender { NSArray *values=@[@"文字",@"直線",@"矢印",@"丸",@"軸1",@"軸2",@"軸3D",@"楕円",@"四角",@"三角",@"x",@"角度",@"軌道",@"フリー"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) { NSString *display=[NSString stringWithFormat:@"%@    %@", [self drawingToolGlyph:v], [self drawingToolDisplayName:v]]; NSMutableDictionary *option=[[self drawingOption:v display:display selected:self.drawingTool] mutableCopy]; option[@"image"]=[self drawingToolIcon:v color:UIColor.labelColor]; [options addObject:option]; } [self showDrawingOptions:options title:@"描画種別" handler:^(NSString *v){ self.drawingTool=v; [self refreshDrawingPaletteState]; }]; }
 - (void)drawingCategoryMenu:(id)sender { NSArray *values=@[@"汎用",@"基準",@"対象"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) [options addObject:[self drawingOption:v display:v selected:self.drawingCategory]]; [self showDrawingOptions:options title:@"カテゴリ" handler:^(NSString *v){ self.drawingCategory=v; if ([v isEqualToString:@"基準"] || [v isEqualToString:@"対象"]) self.drawingTool=@"直線"; if ([v isEqualToString:@"基準"]) self.drawingLineStyle=@"点線"; [self refreshDrawingPaletteState]; }]; }
 - (void)drawingLineStyleMenu:(id)sender { NSArray *values=@[@"実線",@"点線",@"鎖線"]; NSArray *samples=@[@"━━━━━━  実線",@"• • • • •  点線",@"━━  ━━  ━━  鎖線"]; NSMutableArray *options=[NSMutableArray array]; for (NSInteger i=0;i<values.count;i++) [options addObject:[self drawingOption:values[i] display:samples[i] selected:self.drawingLineStyle]]; [self showDrawingOptions:options title:@"線種" handler:^(NSString *v){ self.drawingLineStyle=v; [self refreshDrawingPaletteState]; }]; }
-- (UIColor *)colorForName:(NSString *)name { NSDictionary *colors=@{@"緑":UIColor.greenColor,@"黄":UIColor.yellowColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; return colors[name] ?: UIColor.greenColor; }
-- (NSString *)colorNameForColor:(UIColor *)color { if (!color) return @"なし"; CGFloat r=0,g=0,b=0,a=1; [color getRed:&r green:&g blue:&b alpha:&a]; if (a <= 0.01) return @"なし"; NSDictionary *colors=@{@"黄":UIColor.yellowColor,@"緑":UIColor.greenColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.systemPinkColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; for (NSString *name in colors) if ([color isEqual:colors[name]]) return name; return @"その他"; }
+- (UIColor *)colorForName:(NSString *)name { NSDictionary *colors=@{@"緑":UIColor.greenColor,@"黄":UIColor.yellowColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.magentaColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; return colors[name] ?: UIColor.greenColor; }
+- (NSString *)colorNameForColor:(UIColor *)color { if (!color) return @"なし"; CGFloat r=0,g=0,b=0,a=1; [color getRed:&r green:&g blue:&b alpha:&a]; if (a <= 0.01) return @"なし"; NSDictionary *colors=@{@"黄":UIColor.yellowColor,@"緑":UIColor.greenColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.magentaColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; for (NSString *name in colors) if ([color isEqual:colors[name]]) return name; return @"その他"; }
 - (void)drawingColorMenu:(BOOL)background {
     NSArray *values=@[@"緑",@"黄",@"オレンジ",@"ピンク",@"明るい紫",@"赤",@"青",@"白",@"その他"];
     // UIAlertAction のタイトル内で個別に文字色を指定できないため、
@@ -1311,6 +1380,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 - (void)selectDrawingTextButton:(UIButton *)sender {
     if (![self.drawingTool isEqualToString:@"文字"]) return;
+    self.drawingTextReversed = NO;
     NSString *value = sender.accessibilityIdentifier ?: sender.currentTitle;
     if ([value isEqualToString:@"⌨"]) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"文字入力" message:@"16文字以内で入力してください" preferredStyle:UIAlertControllerStyleAlert];
@@ -1322,6 +1392,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
                 if (!self.customDrawingTexts) self.customDrawingTexts = [NSMutableArray array];
                 if (![self.customDrawingTexts containsObject:text]) [self.customDrawingTexts addObject:text];
                 [self saveDrawingTextOptions]; self.drawingText = text;
+                [self rebuildDrawingTextPalette];
             }
             [self refreshDrawingPaletteState];
             self.drawingTextPalette.hidden = YES;
@@ -1394,10 +1465,10 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)refreshFavoriteState {
     NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
-    self.favorite = url && [[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] containsObject:url.path];
+    self.favorite = url && [ReceivedVideoManager isFavoriteVideo:url];
     [self.favoriteButton setImage:[UIImage systemImageNamed:(self.favorite ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
     self.favoriteButton.tintColor = self.favorite ? UIColor.systemPinkColor : UIColor.whiteColor;
-    self.favoriteIndicator.hidden = !self.favorite;
+    self.favoriteIndicator.hidden = self.drawingMode || !self.favorite;
 }
 
 - (void)setPlaylist:(NSArray<NSURL *> *)playlist currentIndex:(NSInteger)index {
@@ -1533,7 +1604,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.favoriteButton.hidden = NO;
     self.infoButton.hidden = NO;
     self.deleteButton.hidden = NO;
-    self.drawingButton.hidden = self.player.rate > 0;
+    self.drawingButton.hidden = !self.drawingMode && self.player.rate > 0;
     self.timeLabel.hidden = NO;
     [self.speedControlHost bringSubviewToFront:self.speedControlContainer];
     [self.speedControlHost bringSubviewToFront:self.playButton];
@@ -1552,6 +1623,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if (self.drawingMode && [self.drawingTool isEqualToString:@"文字"] && !self.drawingTextPalette.hidden) {
         [self.speedControlHost bringSubviewToFront:self.drawingTextPalette];
     }
+    [self updateDrawingControlVisibility];
     [self.speedHideTimer invalidate];
     if (self.drawingMode) return;
     // A点を設定した後は、B点を設定するまで操作列を消さない。
@@ -1636,7 +1708,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.player.rate = self.wjSelectedSpeed;
         [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal];
     }
-    self.drawingButton.hidden = self.player.rate > 0;
+    self.drawingButton.hidden = !self.drawingMode && self.player.rate > 0;
     if (self.player.rate > 0) {
         self.drawingCanvas.drawingEnabled = NO;
         self.drawingPalette.hidden = YES;
@@ -1707,8 +1779,20 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         else if ([tool isEqualToString:@"x"]) { CGFloat arm=MAX(4.0, hypot(last.x-first.x,last.y-first.y)), rotation=[item[@"rotation"] doubleValue], c=cos(rotation), s=sin(rotation); CGPoint p1=CGPointMake(first.x+c*(-arm), first.y+s*(-arm)), p2=CGPointMake(first.x+c*arm, first.y+s*arm), p3=CGPointMake(first.x-s*(-arm), first.y+c*(-arm)), p4=CGPointMake(first.x-s*arm, first.y+c*arm); CGPathMoveToPoint(path,NULL,p1.x,p1.y); CGPathAddLineToPoint(path,NULL,p2.x,p2.y); CGPathMoveToPoint(path,NULL,p3.x,p3.y); CGPathAddLineToPoint(path,NULL,p4.x,p4.y); }
         else { CGPathMoveToPoint(path,NULL,first.x,first.y); for (NSValue *v in points.count > 1 ? [points subarrayWithRange:NSMakeRange(1, points.count-1)] : @[]) { CGPoint p = v.CGPointValue; CGPathAddLineToPoint(path,NULL,p.x,p.y); } }
         shape.path = path; CGPathRelease(path); [overlay addSublayer:shape]; [self wjAnimateAnnotationLayer:shape item:item duration:duration];
-        NSString *text = item[@"text"]; NSNumber *angle = item[@"angle"]; if (text.length == 0 && angle) text = [NSString stringWithFormat:@"%.1f°", angle.doubleValue];
-        if (text.length) { CATextLayer *label = [CATextLayer layer]; label.string = text; label.font = (__bridge CFTypeRef)@"Helvetica-Bold"; label.fontSize = 20; label.alignmentMode = kCAAlignmentCenter; label.contentsScale = UIScreen.mainScreen.scale; label.foregroundColor = [self wjAnnotationTextColorForBackground:color].CGColor; label.backgroundColor = [color colorWithAlphaComponent:.8].CGColor; label.cornerRadius = 5; label.frame = CGRectMake(last.x - 42, last.y - 16, 84, 32); [overlay addSublayer:label]; [self wjAnimateAnnotationLayer:label item:item duration:duration]; }
+        BOOL isText = [tool isEqualToString:@"文字"];
+        NSString *text = isText ? item[@"text"] : nil; NSNumber *angle = item[@"angle"]; if (!isText && angle) text = [NSString stringWithFormat:@"%.1f°", angle.doubleValue];
+        if (text.length) {
+            BOOL reversed = !isText || [item[@"textReversed"] boolValue];
+            CGFloat fontSize = reversed ? 18 : 22;
+            CGSize textSize = [text sizeWithAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:fontSize]}];
+            CATextLayer *label = [CATextLayer layer]; label.string = text; label.font = (__bridge CFTypeRef)@"Helvetica-Bold"; label.fontSize = fontSize;
+            label.alignmentMode = kCAAlignmentCenter; label.contentsScale = UIScreen.mainScreen.scale;
+            label.foregroundColor = (reversed ? [self wjAnnotationTextColorForBackground:color] : color).CGColor;
+            label.backgroundColor = (reversed ? [color colorWithAlphaComponent:.92] : UIColor.clearColor).CGColor;
+            label.cornerRadius = reversed ? 5 : 0;
+            label.frame = CGRectMake(last.x - (textSize.width + 12)/2, last.y - 16, textSize.width + 12, textSize.height + 8);
+            [overlay addSublayer:label]; [self wjAnimateAnnotationLayer:label item:item duration:duration];
+        }
     }
 }
 - (void)exportDrawingVideo:(id)sender {
@@ -1727,14 +1811,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)toggleFavorite:(id)sender {
     NSURL *url = [(AVURLAsset *)self.player.currentItem.asset URL];
     if (!url) return;
-    NSMutableArray *paths = [NSMutableArray arrayWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] ?: @[]];
-    if ([paths containsObject:url.path]) { [paths removeObject:url.path]; self.favorite = NO; }
-    else { [paths addObject:url.path]; self.favorite = YES; }
-    [[NSUserDefaults standardUserDefaults] setObject:paths forKey:@"WJFavoriteVideoPaths"];
-    [self.favoriteButton setImage:[UIImage systemImageNamed:(self.favorite ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
-    self.favoriteButton.tintColor = self.favorite ? UIColor.systemPinkColor : UIColor.whiteColor;
-    self.favoriteIndicator.hidden = !self.favorite;
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"WJVideoFavoritesChanged" object:url];
+    [ReceivedVideoManager setFavoriteVideo:url favorite:![ReceivedVideoManager isFavoriteVideo:url]];
+    [self refreshFavoriteState];
     [self showSpeedControls];
 }
 
@@ -1827,6 +1905,15 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"動画を削除しますか？" message:url.lastPathComponent preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        NSURL *nextURL = nil;
+        NSInteger current = [self.playlist indexOfObject:url];
+        if (current != NSNotFound) for (NSInteger index = current + 1; index < self.playlist.count; index++) {
+            NSURL *candidate = self.playlist[index];
+            if ([NSFileManager.defaultManager fileExistsAtPath:candidate.path]) { nextURL = candidate; break; }
+        }
+        // Read before removing the metadata that supplies the persistent ID.
+        [ReceivedVideoManager isFavoriteVideo:url];
+        NSString *deletedIdentity = [ReceivedVideoManager videoIdentity:url];
         NSFileManager *files = NSFileManager.defaultManager;
         NSError *error = nil;
         for (NSURL *target in WJPlayerVideoAndRelatedJSONFiles(url)) {
@@ -1837,8 +1924,21 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
             [failure addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:failure animated:YES completion:nil];
         } else {
+            NSMutableArray *ids = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoIDs"] mutableCopy];
+            [ids removeObject:deletedIdentity];
+            if (ids) [[NSUserDefaults standardUserDefaults] setObject:ids forKey:@"WJFavoriteVideoIDs"];
+            [ReceivedVideoManager setFavoriteVideo:url favorite:NO];
+            NSMutableArray *remaining = [self.playlist mutableCopy];
+            [remaining removeObject:url];
+            self.playlist = remaining;
             [[NSNotificationCenter defaultCenter] postNotificationName:@"WJVideoDeleted" object:url];
-            [self dismissViewControllerAnimated:YES completion:nil];
+            if (nextURL) {
+                self.playlistIndex = [self.playlist indexOfObject:nextURL];
+                [self replaceVideoURL:nextURL];
+            } else {
+                [self.player pause];
+                [self closePlayer:nil];
+            }
         }
     }]];
     [self presentViewController:alert animated:YES completion:nil];

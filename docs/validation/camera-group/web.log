@@ -1,0 +1,15 @@
+PASS GET  -> 200
+PASS GET status -> 403
+PASS GET start -> 404
+PASS POST start -> 403
+PASS POST start -> 200
+PASS POST start -> 409
+PASS GET status -> 200
+PASS POST stop -> 200
+PASS POST stop -> 200
+PASS POST start -> 403
+PASS POST start -> 403
+PASS POST start -> 200
+PASS POST stop -> 200
+PASS POST start -> 200
+ALL WEB TESTS PASSED

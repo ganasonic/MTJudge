@@ -12,6 +12,40 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
     CGAffineTransform t = track.preferredTransform; t.tx -= rect.origin.x; t.ty -= rect.origin.y; return t;
 }
 
+// Use display aspect ratios, never the source resolution, to allocate comparison panes.
+static CGSize WJComparisonAspects(CGSize main, CGSize sub) {
+    CGFloat a = main.width / MAX(main.height, 1), b = sub.width / MAX(sub.height, 1);
+    if (a <= 0) a = 9.0 / 16.0;
+    if (b <= 0) b = 9.0 / 16.0;
+    if (a < 1 && b < 1) a = b = MAX(a, b);
+    return CGSizeMake(a, b);
+}
+static void WJComparisonRects(CGRect area, CGSize aspects, BOOL sideBySide, CGRect *main, CGRect *sub) {
+    if (sideBySide) {
+        CGFloat width = area.size.width * aspects.width / (aspects.width + aspects.height);
+        CGFloat minimumWidth = MIN(180, area.size.width / 2);
+        width = MAX(minimumWidth, MIN(area.size.width - minimumWidth, width));
+        *main = CGRectMake(area.origin.x, area.origin.y, width, area.size.height);
+        *sub = CGRectMake(CGRectGetMaxX(*main), area.origin.y, area.size.width - width, area.size.height);
+    } else {
+        CGFloat height = area.size.height * aspects.height / (aspects.width + aspects.height);
+        *main = CGRectMake(area.origin.x, area.origin.y, area.size.width, height);
+        *sub = CGRectMake(area.origin.x, CGRectGetMaxY(*main), area.size.width, area.size.height - height);
+    }
+}
+static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstruction *instruction, AVAssetTrack *track, CGRect pane, CGFloat zoom, BOOL mirrored) {
+    CGSize size = WJOrientedTrackSize(track);
+    CGFloat scale = MIN(pane.size.width / MAX(size.width, 1), pane.size.height / MAX(size.height, 1)) * zoom;
+    CGFloat width = size.width * scale, height = size.height * scale;
+    CGAffineTransform t = CGAffineTransformConcat(WJNormalizedTrackTransform(track), CGAffineTransformMakeScale(mirrored ? -scale : scale, scale));
+    t = CGAffineTransformConcat(t, CGAffineTransformMakeTranslation(CGRectGetMidX(pane) - width / 2 + (mirrored ? width : 0), CGRectGetMidY(pane) - height / 2));
+    // Clip zoomed pixels to their own pane before the transform, just as on screen.
+    CGRect crop = CGRectApplyAffineTransform(pane, CGAffineTransformInvert(t));
+    crop = CGRectIntersection(crop, CGRectMake(0, 0, track.naturalSize.width, track.naturalSize.height));
+    [instruction setCropRectangle:crop atTime:kCMTimeZero];
+    [instruction setTransform:t atTime:kCMTimeZero];
+}
+
 @interface WaterJumpComparisonViewController ()
 @property (nonatomic, strong) NSURL *mainURL;
 @property (nonatomic, strong) NSURL *subURL;
@@ -19,6 +53,9 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
 @property (nonatomic, strong) AVPlayer *subPlayer;
 @property (nonatomic, strong) AVPlayerLayer *mainLayer;
 @property (nonatomic, strong) AVPlayerLayer *subLayer;
+@property (nonatomic, strong) CALayer *mainViewport;
+@property (nonatomic, strong) CALayer *subViewport;
+@property (nonatomic) CGSize comparisonAspects;
 @property (nonatomic, strong) UISlider *positionSlider;
 @property (nonatomic, strong) UISlider *mainPositionSlider;
 @property (nonatomic, strong) UISlider *subPositionSlider;
@@ -81,6 +118,8 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshFavorites) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshFavorites) name:@"WJVideoFavoritesChanged" object:nil];
     self.mainPlayer = [AVPlayer playerWithURL:self.mainURL];
     self.subPlayer = [AVPlayer playerWithURL:self.subURL];
     self.mainZoomScale = 1.0; self.subZoomScale = 1.0;
@@ -92,7 +131,11 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
     [self.view addGestureRecognizer:pinch];
     self.mainLayer.videoGravity = AVLayerVideoGravityResizeAspect;
     self.subLayer.videoGravity = AVLayerVideoGravityResizeAspect;
-    [self.view.layer addSublayer:self.mainLayer]; [self.view.layer addSublayer:self.subLayer];
+    self.mainViewport = [CALayer layer]; self.subViewport = [CALayer layer];
+    self.mainViewport.masksToBounds = YES; self.subViewport.masksToBounds = YES;
+    [self.view.layer addSublayer:self.mainViewport]; [self.view.layer addSublayer:self.subViewport];
+    [self.mainViewport addSublayer:self.mainLayer]; [self.subViewport addSublayer:self.subLayer];
+    [self refreshComparisonAspects];
     self.mainLabel = [self label:@"MAIN"]; self.subLabel = [self label:@"SUB"];
     [self.view addSubview:self.mainLabel]; [self.view addSubview:self.subLabel];
     self.positionSlider = [UISlider new]; self.positionSlider.minimumValue = 0; self.positionSlider.maximumValue = 1;
@@ -194,8 +237,47 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
 - (void)updateIndividualTransportButtons { [self.mainPlayButton setImage:[UIImage systemImageNamed:(self.mainPlayer.rate > 0 ? @"pause.fill" : @"play.fill")] forState:UIControlStateNormal]; [self.subPlayButton setImage:[UIImage systemImageNamed:(self.subPlayer.rate > 0 ? @"pause.fill" : @"play.fill")] forState:UIControlStateNormal]; }
 - (UIButton *)transportButton:(NSString *)symbol action:(SEL)action tag:(NSInteger)tag { UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem]; [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal]; button.tintColor = UIColor.whiteColor; button.backgroundColor = [UIColor colorWithWhite:0 alpha:.45]; button.layer.cornerRadius = 6; button.tag = tag; [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside]; return button; }
 - (void)updateLinkControls { self.positionSlider.hidden = NO; self.speedSlider.hidden = NO; self.mainPositionSlider.hidden = self.linkedPlayback; self.subPositionSlider.hidden = self.linkedPlayback; for (UIView *view in @[self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton, self.mainMirrorButton, self.subMirrorButton]) view.hidden = self.linkedPlayback; self.syncPointButton.enabled = self.linkedPlayback; self.syncPointButton.alpha = self.linkedPlayback ? 1.0 : .35; self.linkButton.tintColor = [UIColor.systemGreenColor colorWithAlphaComponent:self.linkedPlayback ? 1.0 : .3]; [self.linkButton setImage:[UIImage systemImageNamed:@"link"] forState:UIControlStateNormal]; self.linkButton.accessibilityValue = self.linkedPlayback ? @"選択中：2画面を連動" : @"未選択：個別操作"; }
-- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; CGFloat top = self.view.safeAreaInsets.top + 32, bottom = self.view.bounds.size.height - 128; CGFloat availableHeight = MAX(1, bottom - top); CGFloat boundaryX = self.view.bounds.size.width / 2.0; CGFloat boundaryY = top + availableHeight / 2.0; CGRect mainRect, subRect; if (self.sideBySide) { CGFloat w = boundaryX; mainRect = CGRectMake(0, top, w, availableHeight); subRect = CGRectMake(w, top, w, availableHeight); } else { CGFloat h = MAX(1, availableHeight / 2.0); boundaryY = top + h; mainRect = CGRectMake(0, top, self.view.bounds.size.width, h); subRect = CGRectMake(0, boundaryY, self.view.bounds.size.width, h); } self.mainLayer.frame = mainRect; self.subLayer.frame = subRect; [self.mainLabel sizeToFit]; [self.subLabel sizeToFit]; CGFloat labelX = 12.0; self.mainLabel.frame = CGRectMake(mainRect.origin.x + labelX, mainRect.origin.y + 8.0, self.mainLabel.bounds.size.width, self.mainLabel.bounds.size.height); self.subLabel.frame = CGRectMake(subRect.origin.x + labelX, subRect.origin.y + 8.0, self.subLabel.bounds.size.width, self.subLabel.bounds.size.height); self.linkButton.frame = CGRectMake((self.sideBySide ? boundaryX : self.view.bounds.size.width / 2.0) - 24.0, boundaryY - 24.0, 48.0, 48.0); CGFloat sliderHeight = 32.0, sliderYMain = CGRectGetMaxY(mainRect) - sliderHeight - 42.0, sliderYSub = CGRectGetMaxY(subRect) - sliderHeight - 42.0; self.mainPositionSlider.frame = CGRectMake(mainRect.origin.x + 24, sliderYMain, MAX(1, mainRect.size.width - 48), sliderHeight); self.subPositionSlider.frame = CGRectMake(subRect.origin.x + 24, sliderYSub, MAX(1, subRect.size.width - 48), sliderHeight); [self layoutTransportButton:self.mainBackButton play:self.mainPlayButton forward:self.mainForwardButton inRect:mainRect sliderY:sliderYMain]; [self layoutTransportButton:self.subBackButton play:self.subPlayButton forward:self.subForwardButton inRect:subRect sliderY:sliderYSub]; CGFloat mirrorSize = 36.0; self.mainMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.mainForwardButton.frame) + 6.0, self.mainForwardButton.frame.origin.y, mirrorSize, mirrorSize); self.subMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.subForwardButton.frame) + 6.0, self.subForwardButton.frame.origin.y, mirrorSize, mirrorSize); [self.view bringSubviewToFront:self.linkButton]; [self.view bringSubviewToFront:self.syncBackButton]; [self.view bringSubviewToFront:self.playButton]; [self.view bringSubviewToFront:self.syncForwardButton]; [self.view bringSubviewToFront:self.mainMirrorButton]; [self.view bringSubviewToFront:self.subMirrorButton]; [self.view bringSubviewToFront:self.mainPositionSlider]; [self.view bringSubviewToFront:self.subPositionSlider]; }
-- (void)layoutTransportButton:(UIButton *)back play:(UIButton *)play forward:(UIButton *)forward inRect:(CGRect)rect sliderY:(CGFloat)sliderY { CGFloat size = 36.0, gap = 8.0, total = size * 3 + gap * 2; CGFloat x = CGRectGetMidX(rect) - total / 2.0; CGFloat y = sliderY - size - 4.0; back.frame = CGRectMake(x, y, size, size); play.frame = CGRectMake(x + size + gap, y, size, size); forward.frame = CGRectMake(x + (size + gap) * 2, y, size, size); }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAllButUpsideDown; }
+- (BOOL)shouldAutorotate { return YES; }
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self refreshFavorites];
+    [self setNeedsUpdateOfSupportedInterfaceOrientations];
+    [UIViewController attemptRotationToDeviceOrientation];
+}
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if (size.width > size.height) self.sideBySide = YES;
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    } completion:nil];
+}
+- (void)refreshComparisonAspects {
+    AVAssetTrack *main = [self.mainPlayer.currentItem.asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    AVAssetTrack *sub = [self.subPlayer.currentItem.asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    self.comparisonAspects = WJComparisonAspects(WJOrientedTrackSize(main), WJOrientedTrackSize(sub));
+    [self.view setNeedsLayout];
+}
+- (void)layoutPlayerLayer:(AVPlayerLayer *)layer inViewport:(CALayer *)viewport rect:(CGRect)rect zoom:(CGFloat)zoom mirrored:(BOOL)mirrored {
+    viewport.frame = rect;
+    layer.bounds = CGRectMake(0, 0, rect.size.width, rect.size.height);
+    layer.position = CGPointMake(rect.size.width / 2, rect.size.height / 2);
+    layer.affineTransform = CGAffineTransformMakeScale(mirrored ? -zoom : zoom, zoom);
+}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGRect safe = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
+    CGFloat top = CGRectGetMinY(safe) + 48, bottom = CGRectGetMaxY(safe) - 112;
+    CGRect area = CGRectMake(safe.origin.x, top, safe.size.width, MAX(1, bottom - top));
+    CGRect mainRect, subRect;
+    WJComparisonRects(area, self.comparisonAspects, self.sideBySide, &mainRect, &subRect);
+    CGFloat boundaryX = CGRectGetMaxX(mainRect), boundaryY = self.sideBySide ? CGRectGetMidY(area) : CGRectGetMaxY(mainRect);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    [self layoutPlayerLayer:self.mainLayer inViewport:self.mainViewport rect:mainRect zoom:self.mainZoomScale mirrored:self.mainMirrored];
+    [self layoutPlayerLayer:self.subLayer inViewport:self.subViewport rect:subRect zoom:self.subZoomScale mirrored:self.subMirrored];
+    [CATransaction commit];
+ [self.mainLabel sizeToFit]; [self.subLabel sizeToFit]; CGFloat labelX = 12.0; self.mainLabel.frame = CGRectMake(mainRect.origin.x + labelX, mainRect.origin.y + 8.0, self.mainLabel.bounds.size.width, self.mainLabel.bounds.size.height); self.subLabel.frame = CGRectMake(subRect.origin.x + labelX, subRect.origin.y + 8.0, self.subLabel.bounds.size.width, self.subLabel.bounds.size.height); self.linkButton.frame = CGRectMake((self.sideBySide ? boundaryX : self.view.bounds.size.width / 2.0) - 24.0, boundaryY - 24.0, 48.0, 48.0); CGFloat sliderHeight = 32.0, sliderYMain = CGRectGetMaxY(mainRect) - sliderHeight - 42.0, sliderYSub = CGRectGetMaxY(subRect) - sliderHeight - 42.0; self.mainPositionSlider.frame = CGRectMake(mainRect.origin.x + 24, sliderYMain, MAX(1, mainRect.size.width - 48), sliderHeight); self.subPositionSlider.frame = CGRectMake(subRect.origin.x + 24, sliderYSub, MAX(1, subRect.size.width - 48), sliderHeight); [self layoutTransportButton:self.mainBackButton play:self.mainPlayButton forward:self.mainForwardButton inRect:mainRect sliderY:sliderYMain]; [self layoutTransportButton:self.subBackButton play:self.subPlayButton forward:self.subForwardButton inRect:subRect sliderY:sliderYSub]; CGFloat mirrorSize = 36.0; self.mainMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.mainForwardButton.frame) + 6.0, self.mainForwardButton.frame.origin.y, mirrorSize, mirrorSize); self.subMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.subForwardButton.frame) + 6.0, self.subForwardButton.frame.origin.y, mirrorSize, mirrorSize); [self.view bringSubviewToFront:self.linkButton]; [self.view bringSubviewToFront:self.syncBackButton]; [self.view bringSubviewToFront:self.playButton]; [self.view bringSubviewToFront:self.syncForwardButton]; [self.view bringSubviewToFront:self.mainMirrorButton]; [self.view bringSubviewToFront:self.subMirrorButton]; [self.view bringSubviewToFront:self.mainPositionSlider]; [self.view bringSubviewToFront:self.subPositionSlider]; }
+- (void)layoutTransportButton:(UIButton *)back play:(UIButton *)play forward:(UIButton *)forward inRect:(CGRect)rect sliderY:(CGFloat)sliderY { CGFloat size = 36.0, gap = 6.0, total = size * 4 + gap * 3; CGFloat x = CGRectGetMidX(rect) - total / 2.0; CGFloat y = sliderY - size - 4.0; back.frame = CGRectMake(x, y, size, size); play.frame = CGRectMake(x + size + gap, y, size, size); forward.frame = CGRectMake(x + (size + gap) * 2, y, size, size); }
 - (void)togglePlay:(id)sender { BOOL playing = self.mainPlayer.rate > 0 || self.subPlayer.rate > 0; if (playing) { [self.mainPlayer pause]; [self.subPlayer pause]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; } else { self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal]; } [self updateIndividualTransportButtons]; }
 - (void)startPlayback {
     // 両方のサイドカーに記録された撮影開始時刻を使い、共通の実時刻が
@@ -245,8 +327,8 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
 - (CMTime)frameDurationForPlayer:(AVPlayer *)player { AVAssetTrack *track = [[player.currentItem.asset tracksWithMediaType:AVMediaTypeVideo] firstObject]; CMTime d = track.minFrameDuration; if (CMTIME_IS_VALID(d) && d.value > 0) return d; float fps = track.nominalFrameRate; return CMTimeMakeWithSeconds(fps > 0 ? 1.0 / fps : 1.0 / 30.0, 600); }
 - (void)stepFrame:(id)sender { [self.mainPlayer pause]; [self.subPlayer pause]; CMTime step = [self frameDurationForPlayer:self.mainPlayer]; [self seekBoth:CMTimeAdd(self.mainPlayer.currentTime, step)]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; }
 - (void)individualTransport:(UIButton *)sender { AVPlayer *player = sender.tag <= 3 ? self.mainPlayer : self.subPlayer; BOOL isPlay = (sender.tag == 2 || sender.tag == 5); if (isPlay) { if (player.rate > 0) { [player pause]; [sender setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; } else { player.rate = self.speed; [sender setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal]; } return; } [player pause]; CMTime current = player.currentTime; CMTime delta = [self frameDurationForPlayer:player]; if (sender.tag == 1 || sender.tag == 4) delta = CMTimeMake(-delta.value, delta.timescale); CMTime target = CMTimeAdd(current, delta); if (CMTIME_COMPARE_INLINE(target, <, kCMTimeZero)) target = kCMTimeZero; [player seekToTime:target toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; UIButton *play = sender.tag <= 3 ? self.mainPlayButton : self.subPlayButton; [play setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; }
-- (void)toggleMainMirror:(id)sender { self.mainMirrored = !self.mainMirrored; self.mainLayer.affineTransform = self.mainMirrored ? CGAffineTransformMakeScale(-1, 1) : CGAffineTransformIdentity; [self.mainMirrorButton setImage:[UIImage systemImageNamed:(self.mainMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
-- (void)toggleSubMirror:(id)sender { self.subMirrored = !self.subMirrored; self.subLayer.affineTransform = self.subMirrored ? CGAffineTransformMakeScale(-1, 1) : CGAffineTransformIdentity; [self.subMirrorButton setImage:[UIImage systemImageNamed:(self.subMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
+- (void)toggleMainMirror:(id)sender { self.mainMirrored = !self.mainMirrored; [self.view setNeedsLayout]; [self.mainMirrorButton setImage:[UIImage systemImageNamed:(self.mainMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
+- (void)toggleSubMirror:(id)sender { self.subMirrored = !self.subMirrored; [self.view setNeedsLayout]; [self.subMirrorButton setImage:[UIImage systemImageNamed:(self.subMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
 - (void)selectComparisonVideo:(id)sender {
     __weak typeof(self) weakSelf = self;
     UIViewController *library = [WaterJumpSettingsViewController videoLibraryViewControllerForComparisonWithMainURL:self.mainURL selection:^(NSURL *url) {
@@ -254,6 +336,9 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
         if (!self) return;
         self.subURL = url;
         [self.subPlayer replaceCurrentItemWithPlayerItem:[AVPlayerItem playerItemWithURL:url]];
+        self.subZoomScale = 1.0;
+        [self refreshComparisonAspects];
+        [self refreshFavorites];
         self.hasLinkedAnchors = NO; self.linkedPlayback = NO; self.linkedMainAnchor = kCMTimeInvalid; self.linkedSubAnchor = kCMTimeInvalid;
         self.loopStart = kCMTimeInvalid; self.loopEnd = kCMTimeInvalid; self.subLoopStart = kCMTimeInvalid; self.subLoopEnd = kCMTimeInvalid; self.loopEnabled = NO;
         [self refreshComparisonFeatureButtons]; [self updateLinkControls]; [self updatePosition];
@@ -264,14 +349,19 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
 }
 - (void)comparisonPinched:(UIPinchGestureRecognizer *)gesture {
     CGPoint point = [gesture locationInView:self.view];
-    BOOL mainArea = self.sideBySide ? point.x < self.view.bounds.size.width * .5 : point.y < self.view.bounds.size.height * .5;
+    BOOL mainArea = CGRectContainsPoint(self.mainViewport.frame, point);
     CGFloat *scale = mainArea ? &_mainZoomScale : &_subZoomScale;
     *scale = MIN(3.0, MAX(1.0, *scale * gesture.scale));
     gesture.scale = 1.0;
     CGAffineTransform transform = CGAffineTransformMakeScale(mainArea ? (self.mainMirrored ? -*scale : *scale) : (self.subMirrored ? -*scale : *scale), *scale);
     if (mainArea) self.mainLayer.affineTransform = transform; else self.subLayer.affineTransform = transform;
 }
-- (void)close { [self.mainPlayer pause]; [self.subPlayer pause]; self.loopEnabled = NO; self.loopSeekInProgress = NO; if (self.observer) { [self.mainPlayer removeTimeObserver:self.observer]; self.observer = nil; } [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)close { [self.mainPlayer pause]; [self.subPlayer pause]; self.loopEnabled = NO; self.loopSeekInProgress = NO; if (self.observer) { [self.mainPlayer removeTimeObserver:self.observer]; self.observer = nil; } UIWindowScene *scene = self.view.window.windowScene;
+    UIViewController *presenter = self.presentingViewController;
+    [self dismissViewControllerAnimated:YES completion:^{
+        [presenter setNeedsUpdateOfSupportedInterfaceOrientations];
+        [scene requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:UIInterfaceOrientationMaskPortrait] errorHandler:^(NSError *error) { NSLog(@"Comparison portrait restore: %@", error); }];
+    }]; }
 - (void)shareVideos:(id)sender { UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[self.mainURL, self.subURL] applicationActivities:nil]; if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = sender; activity.popoverPresentationController.sourceRect = [sender bounds]; } [self presentViewController:activity animated:YES completion:nil]; }
 - (void)exportComparisonVideo:(id)sender {
     AVAsset *mainAsset = [AVAsset assetWithURL:self.mainURL], *subAsset = [AVAsset assetWithURL:self.subURL];
@@ -301,19 +391,23 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
     if (error) { [self showExportError:error]; return; }
     CGSize mainSize = WJOrientedTrackSize(mainTrack);
     CGSize subSize = WJOrientedTrackSize(subTrack);
-    CGSize scaledMain = CGSizeMake(mainSize.width * self.mainZoomScale, mainSize.height * self.mainZoomScale);
-    CGSize scaledSub = CGSizeMake(subSize.width * self.subZoomScale, subSize.height * self.subZoomScale);
-    CGSize render = self.sideBySide ? CGSizeMake(scaledMain.width + scaledSub.width, MAX(scaledMain.height, scaledSub.height)) : CGSizeMake(MAX(scaledMain.width, scaledSub.width), scaledMain.height + scaledSub.height);
+    CGSize aspects = WJComparisonAspects(mainSize, subSize);
+    // Normalize resolution before arranging the panes (e.g. 1080p vs 4K portrait).
+    CGFloat height = MIN(1920, MAX(mainSize.height, subSize.height));
+    CGFloat width = MIN(1920, MAX(mainSize.width, subSize.width));
+    CGSize render = self.sideBySide ? CGSizeMake(height * (aspects.width + aspects.height), height) : CGSizeMake(width, width / aspects.width + width / aspects.height);
+    CGFloat limit = MIN(1, 3840 / MAX(render.width, render.height));
+    render = CGSizeMake(MAX(2, ceil(render.width * limit / 2) * 2), MAX(2, ceil(render.height * limit / 2) * 2));
+    CGRect mainPane, subPane;
+    WJComparisonRects((CGRect){CGPointZero, render}, aspects, self.sideBySide, &mainPane, &subPane);
     AVMutableVideoComposition *videoComposition = [AVMutableVideoComposition videoComposition];
     videoComposition.renderSize = render; videoComposition.frameDuration = CMTimeMake(1, 30);
     AVMutableVideoCompositionInstruction *instruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction]; instruction.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
     AVMutableVideoCompositionLayerInstruction *mainInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:mainComp];
     AVMutableVideoCompositionLayerInstruction *subInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:subComp];
-    CGAffineTransform mainTransform = CGAffineTransformConcat(WJNormalizedTrackTransform(mainTrack), CGAffineTransformMakeScale(self.mainMirrored ? -self.mainZoomScale : self.mainZoomScale, self.mainZoomScale));
-    CGAffineTransform subTransform = CGAffineTransformConcat(WJNormalizedTrackTransform(subTrack), CGAffineTransformMakeScale(self.subMirrored ? -self.subZoomScale : self.subZoomScale, self.subZoomScale));
-    if (self.sideBySide) subTransform = CGAffineTransformConcat(subTransform, CGAffineTransformMakeTranslation(scaledMain.width, 0));
-    else subTransform = CGAffineTransformConcat(subTransform, CGAffineTransformMakeTranslation(0, scaledMain.height));
-    [mainInstruction setTransform:mainTransform atTime:kCMTimeZero]; [subInstruction setTransform:subTransform atTime:kCMTimeZero]; instruction.layerInstructions = @[mainInstruction, subInstruction]; videoComposition.instructions = @[instruction];
+    WJConfigureComparisonInstruction(mainInstruction, mainTrack, mainPane, self.mainZoomScale, self.mainMirrored);
+    WJConfigureComparisonInstruction(subInstruction, subTrack, subPane, self.subZoomScale, self.subMirrored);
+    instruction.layerInstructions = @[mainInstruction, subInstruction]; videoComposition.instructions = @[instruction];
     NSMutableArray *audioParameters = [NSMutableArray array];
     if (mainAudioComp) { AVMutableAudioMixInputParameters *p = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:mainAudioComp]; [p setVolume:subAudioComp ? 0.5 : 1.0 atTime:kCMTimeZero]; [audioParameters addObject:p]; }
     if (subAudioComp) { AVMutableAudioMixInputParameters *p = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:subAudioComp]; [p setVolume:mainAudioComp ? 0.5 : 1.0 atTime:kCMTimeZero]; [audioParameters addObject:p]; }
@@ -328,6 +422,16 @@ static CGAffineTransform WJNormalizedTrackTransform(AVAssetTrack *track) {
 - (NSURL *)exportDirectoryURL { NSURL *u = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject]; u = [u URLByAppendingPathComponent:@"Recordings" isDirectory:YES]; [[NSFileManager defaultManager] createDirectoryAtURL:u withIntermediateDirectories:YES attributes:nil error:nil]; return u; }
 - (void)presentExportedFile:(NSURL *)url from:(UIView *)source { UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil]; if (activity.popoverPresentationController) { activity.popoverPresentationController.sourceView = source; activity.popoverPresentationController.sourceRect = source.bounds; } [self presentViewController:activity animated:YES completion:nil]; }
 - (void)showExportError:(NSError *)error { UIAlertController *a = [UIAlertController alertControllerWithTitle:@"書き出し失敗" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert]; [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:a animated:YES completion:nil]; }
-- (void)toggleFavorites:(id)sender { NSMutableArray *paths = [NSMutableArray arrayWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"WJFavoriteVideoPaths"] ?: @[]]; BOOL selected = [paths containsObject:self.mainURL.path] && [paths containsObject:self.subURL.path]; if (selected) { [paths removeObject:self.mainURL.path]; [paths removeObject:self.subURL.path]; } else { if (![paths containsObject:self.mainURL.path]) [paths addObject:self.mainURL.path]; if (![paths containsObject:self.subURL.path]) [paths addObject:self.subURL.path]; } [[NSUserDefaults standardUserDefaults] setObject:paths forKey:@"WJFavoriteVideoPaths"]; [self.favoriteButton setImage:[UIImage systemImageNamed:(selected ? @"heart" : @"heart.fill")] forState:UIControlStateNormal]; self.favoriteButton.tintColor = selected ? UIColor.whiteColor : UIColor.systemPinkColor; }
-- (void)dealloc { if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; }
+- (void)refreshFavorites {
+    BOOL selected = [ReceivedVideoManager isFavoriteVideo:self.mainURL] && [ReceivedVideoManager isFavoriteVideo:self.subURL];
+    [self.favoriteButton setImage:[UIImage systemImageNamed:(selected ? @"heart.fill" : @"heart")] forState:UIControlStateNormal];
+    self.favoriteButton.tintColor = selected ? UIColor.systemPinkColor : UIColor.whiteColor;
+}
+- (void)toggleFavorites:(id)sender {
+    BOOL selected = [ReceivedVideoManager isFavoriteVideo:self.mainURL] && [ReceivedVideoManager isFavoriteVideo:self.subURL];
+    [ReceivedVideoManager setFavoriteVideo:self.mainURL favorite:!selected];
+    [ReceivedVideoManager setFavoriteVideo:self.subURL favorite:!selected];
+    [self refreshFavorites];
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; }
 @end

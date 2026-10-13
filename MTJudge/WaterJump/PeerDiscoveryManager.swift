@@ -11,8 +11,19 @@ import UIKit
     var accepted: ((NWConnection) -> Void)?
     @objc public private(set) var peers: [[String: String]] = []
     @objc public private(set) var message = ""
+    #if DEBUG
+    static var testKeychainService: String?
+    #endif
+    private static var keychainService: String {
+        #if DEBUG
+        if let value = testKeychainService { return value }
+        #endif
+        return "MTJudge.WaterJump"
+    }
     private var browser: NWBrowser?
     private var listener: NWListener?
+    @objc public private(set) var listenerReady = false
+    private var advertisementSignature = ""
     private var endpoints: [String: NWEndpoint] = [:]
     @objc public var deviceID: String {
         if let id = UserDefaults.standard.string(forKey: "WJDeviceID") { return id }
@@ -36,6 +47,23 @@ import UIKit
     @objc public var registeredPeers: [[String: String]] {
         (UserDefaults.standard.array(forKey: "WJPeerRegistrations") as? [[String: String]]) ?? []
     }
+    func storeRegistration(name: String, code: String) -> Bool {
+        let parts = code.split(separator:":",maxSplits:1).map(String.init)
+        guard parts.count == 2, UUID(uuidString:parts[0]) != nil, parts[0] != deviceID, Data(base64Encoded:parts[1])?.count == 32 else { return false }
+        return Self.store(parts[1],"sender-"+parts[0])
+    }
+    @objc public func clearRegistrationsAndCredentials() {
+        browser?.cancel(); browser = nil; listener?.cancel(); listener = nil; listenerReady = false
+        endpoints.removeAll(); peers.removeAll(); advertisementSignature = ""
+        var q: [String:Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:Self.keychainService,kSecReturnAttributes as String:true,kSecMatchLimit as String:kSecMatchLimitAll]
+        var result: CFTypeRef?
+        if SecItemCopyMatching(q as CFDictionary,&result) == errSecSuccess, let entries = result as? [[String:Any]] {
+            for entry in entries { if let account = entry[kSecAttrAccount as String] as? String, account.hasPrefix("sender-") || account.hasPrefix("receiver-") || account.hasPrefix("group-") { Self.removeSecret(account) } }
+        }
+        q.removeAll()
+        UserDefaults.standard.removeObject(forKey:"WJPeerRegistrations")
+        UserDefaults.standard.removeObject(forKey:"WJPeerID"); UserDefaults.standard.removeObject(forKey:"WJPeerName")
+    }
     @objc public func registerPeer(_ name: String, code: String) -> Bool {
         let parts = code.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2, UUID(uuidString: parts[0]) != nil, parts[0] != deviceID,
@@ -49,6 +77,12 @@ import UIKit
         UserDefaults.standard.set(parts[0], forKey: "WJPeerID")
         UserDefaults.standard.set(name, forKey: "WJPeerName")
         changed?(); return true
+    }
+    // DNS-SD service names have a 63-byte UTF-8 limit, including the UUID.
+    static func serviceNamePrefix(_ value: String, bytes: Int) -> String {
+        var result = ""
+        for character in value { let next = result + String(character); if next.utf8.count > bytes { break }; result = next }
+        return result
     }
     @objc public func configure(receiving: Bool, browsing: Bool) {
         if browsing && browser == nil {
@@ -67,7 +101,7 @@ import UIKit
                     let advertisedGroup = shortFormat ? parts[0] : (parts.count >= 4 ? parts[1] : "")
                     let localGroup = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
                     let localToken = localGroup.count > 12 ? String(localGroup.prefix(8)) : localGroup
-                    if !localToken.isEmpty && !advertisedGroup.isEmpty && localToken != advertisedGroup { continue }
+                    if UserDefaults.standard.string(forKey:"WJConnectionMode") != "automatic", !localToken.isEmpty && !advertisedGroup.isEmpty && localToken != advertisedGroup { continue }
                     self.endpoints[id] = result.endpoint
                     var peer: [String: String] = ["id": id, "name": shortFormat ? (parts[2].isEmpty ? "MTJudge" : parts[2]) : (parts.first ?? "MTJudge")]
                     if advertisedGroup.count > 0 { peer["groupID"] = advertisedGroup }
@@ -92,7 +126,9 @@ import UIKit
         // グループ設定済み端末はBonjour広告だけ開始する。
         // 実際の受信は self.receiving == true の場合だけ accepted で処理する。
         let configuredGroup = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
-        let shouldAdvertise = receiving || !configuredGroup.isEmpty
+        let shouldAdvertise = receiving || (browsing && !configuredGroup.isEmpty)
+        let signature = configuredGroup + (UserDefaults.standard.string(forKey:"WJCameraRole") ?? "") + (UserDefaults.standard.string(forKey:"WJCameraGroupName") ?? "")
+        if signature != advertisementSignature { listener?.cancel(); listener = nil; listenerReady = false; advertisementSignature = signature }
         if shouldAdvertise && listener == nil {
             let code = pairingCode.components(separatedBy: ":")
             guard code.count == 2, let params = Self.parameters(code[1]) else { message = "ペアリング鍵を作成できません"; changed?(); return }
@@ -105,29 +141,30 @@ import UIKit
                 let deviceName = ProcessInfo.processInfo.hostName
                 #endif
                 var group = UserDefaults.standard.string(forKey: "WJCameraGroupID") ?? ""
-                if group.count > 12 { group = String(group.prefix(8)); UserDefaults.standard.set(group, forKey: "WJCameraGroupID") }
+                if group.count > 12 { group = String(group.prefix(8)) }
                 let groupName = UserDefaults.standard.string(forKey: "WJCameraGroupName") ?? ""
                 let role = UserDefaults.standard.string(forKey: "WJCameraRole") ?? "MAIN_CAMERA"
                 let safeGroup = group.replacingOccurrences(of: "~", with: "-")
                 let safeGroupName = groupName.replacingOccurrences(of: "~", with: "-")
                 let roleCode = role == "SUB_CAMERA" ? "S" : "M"
-                let name = safeGroup.isEmpty ? (String(deviceName.prefix(8)) + "~" + deviceID) : (safeGroup + "~" + roleCode + "~" + String(safeGroupName.prefix(12)) + "~" + deviceID)
+                let name = safeGroup.isEmpty ? (Self.serviceNamePrefix(deviceName,bytes:26) + "~" + deviceID) : (safeGroup + "~" + roleCode + "~" + Self.serviceNamePrefix(safeGroupName,bytes:15) + "~" + deviceID)
                 listener.service = NWListener.Service(name: name, type: "_mtjudge-wj._tcp")
                 listener.newConnectionHandler = { [weak self] connection in
                     guard let accepted = self?.accepted else { connection.cancel(); return }; accepted(connection)
                 }
-                listener.stateUpdateHandler = { [weak self] state in
+                listener.stateUpdateHandler = { [weak self, weak listener] state in
+                    guard let self = self, let listener = listener, self.listener === listener else { return }
                     switch state {
-                    case .ready: self?.message = "受信待機中"
-                    case .failed(let error): self?.message = "受信待受エラー: \(error.localizedDescription)"
-                    case .waiting(_): self?.message = "Wi-Fiとローカルネットワーク許可を確認してください"
+                    case .ready: self.listenerReady = true; self.message = "受信待機中"
+                    case .failed(let error): self.listenerReady = false; self.message = "受信待受エラー: \(error.localizedDescription)"
+                    case .waiting(_): self.message = "Wi-Fiとローカルネットワーク許可を確認してください"
                     default: break
                     }
-                    self?.changed?()
+                    self.changed?()
                 }
                 listener.start(queue: .main)
             } catch { message = error.localizedDescription }
-        } else if !receiving { listener?.cancel(); listener = nil }
+        } else if !shouldAdvertise { listener?.cancel(); listener = nil; listenerReady = false }
         changed?()
     }
     func connection(to id: String) -> NWConnection? {
@@ -146,16 +183,17 @@ import UIKit
         let tcp = NWProtocolTCP.Options(); tcp.connectionTimeout = 15
         return NWParameters(tls: tls, tcp: tcp)
     }
+    static func removeSecret(_ name: String) { SecItemDelete(query(name) as CFDictionary) }
     private static func query(_ name: String) -> [String: Any] {
-        [kSecClass as String:kSecClassGenericPassword, kSecAttrService as String:"MTJudge.WaterJump", kSecAttrAccount as String:name]
+        [kSecClass as String:kSecClassGenericPassword, kSecAttrService as String:Self.keychainService, kSecAttrAccount as String:name]
     }
-    private static func secret(_ name: String) -> String? {
+    static func secret(_ name: String) -> String? {
         var q = query(name); q[kSecReturnData as String] = true
         var item: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
-    private static func store(_ secret: String, _ name: String) -> Bool {
+    static func store(_ secret: String, _ name: String) -> Bool {
         let q = query(name), value = Data(secret.utf8)
         let update = SecItemUpdate(q as CFDictionary, [kSecValueData as String:value] as CFDictionary)
         if update == errSecSuccess { return true }

@@ -5,6 +5,7 @@
 
 #import "SceneDelegate.h"
 #import "AppDelegate.h"
+#import "MTJLocalization.h"
 
 @implementation SceneDelegate
 
@@ -31,6 +32,7 @@ willConnectToSession:(UISceneSession *)session
     }
 
     self.window.rootViewController = tabBarController;
+    MTJLocalizeController(tabBarController);
     [self.window makeKeyAndVisible];
 }
 
@@ -47,7 +49,8 @@ willConnectToSession:(UISceneSession *)session
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
-    // 既存のapplicationWillEnterForeground:には処理がないため、移行対象はない。
+    // Pick up edits made in Files while MTJudge was in the background.
+    [MTJLocalization reload:nil];
 }
 
 @end

@@ -75,7 +75,7 @@
         // 引き継がず、必ず新しいメイン撮影セッションとして開始する。
         if (!remoteStart) {
             [defaults setObject:NSUUID.UUID.UUIDString forKey:@"WJSessionID"];
-            [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
+            if (![[defaults stringForKey:@"WJConnectionMode"] isEqual:@"automatic"]) [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
         } else if (![defaults stringForKey:@"WJSessionID"]) {
             [defaults setObject:NSUUID.UUID.UUIDString forKey:@"WJSessionID"];
         }

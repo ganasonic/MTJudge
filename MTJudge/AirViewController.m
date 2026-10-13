@@ -1,3 +1,4 @@
+#import "MTJLocalization.h"
 //
 //  AirViewController.m
 //  MTJudge
@@ -504,7 +505,7 @@ AirDdArray *airddarray;
     }else if (8.0<level) {
         index = 5;
     }
-    return levelJudgeStr[index];
+    return MTJText(levelJudgeStr[index]);
 }
 
 
@@ -675,10 +676,10 @@ AirDdArray *airddarray;
     switch (component) {
         case(0):
             if(pickerView.tag==1){
-                return [ddlist objectAtIndex:row];
+                return MTJText([ddlist objectAtIndex:row]);
             }else{
                 //if(pickerView.tag==2){
-                return [ddlist2 objectAtIndex:row];
+                return MTJText([ddlist2 objectAtIndex:row]);
             }
             break;
     }

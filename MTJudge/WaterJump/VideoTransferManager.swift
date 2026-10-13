@@ -35,6 +35,14 @@ import Network
     private func recover() {
         // Reconstruct from the committed sidecars as well, closing the crash window
         // between local save and queue insertion. Filenames are never remote paths.
+        if let data = try? Data(contentsOf:queueURL), let stored = (try? JSONSerialization.jsonObject(with:data)) as? [[String:Any]] { jobs = stored }
+        jobs.removeAll { job in
+            guard let filename = job["file"] as? String,
+                  let data = try? Data(contentsOf:ReceivedVideoManager.directory.appendingPathComponent(filename).appendingPathExtension("wj.json")),
+                  let info = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else { return false }
+            if let completed = info["completedPeers"] as? [String] { return completed.contains(job["peer"] as? String ?? "") }
+            return info["transferComplete"] as? Bool == true
+        }
         let entries = (try? FileManager.default.contentsOfDirectory(at:ReceivedVideoManager.directory, includingPropertiesForKeys:nil)) ?? []
         for entry in entries where entry.lastPathComponent.lowercased().hasSuffix(".mov.wj.json") {
             guard let data = try? Data(contentsOf:entry), let info = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
@@ -42,7 +50,7 @@ import Network
                   let id = info["id"] as? String, UUID(uuidString:id) != nil else { continue }
             let filename = (info["filename"] as? String) ?? (id + ".mov")
             guard FileManager.default.fileExists(atPath:ReceivedVideoManager.directory.appendingPathComponent(filename).path) else { continue }
-            jobs.append(["id":id,"file":filename,"metadata":info,"peer":info["peer"] as? String ?? ""])
+            if !jobs.contains(where:{$0["id"] as? String == id}) { jobs.append(["id":id,"file":filename,"metadata":info,"peer":info["peer"] as? String ?? ""]) }
         }
         jobs.sort { (($0["metadata"] as? [String:Any])?["created"] as? Double ?? 0) < (($1["metadata"] as? [String:Any])?["created"] as? Double ?? 0) }
         // The journal is secondary to each file's durable transfer intent.
@@ -55,6 +63,29 @@ import Network
         io.async { self.channel?.fail(ReceivedVideoManager.failure("アプリが前景に戻ったら再送します。")) }
     }
     @objc public var pendingCount: Int { jobs.count }
+    @objc public var communicationBusy: Bool { activeID != nil || state == "RECEIVING" }
+    @objc public var needsRetry: Bool { state == "TRANSFER_FAILED" }
+    private func scoped(_ metadata: [String:Any]) -> [String:Any] {
+        var result = metadata
+        let d = UserDefaults.standard
+        result["connectionMode"] = d.string(forKey:"WJConnectionMode") ?? "manual"
+        result["connectionGeneration"] = d.string(forKey:"WJConnectionGeneration") ?? ""
+        result["groupID"] = d.string(forKey:"WJCameraGroupID") ?? ""
+        result["senderID"] = discovery.deviceID
+        return result
+    }
+    private func eligible(_ job: [String:Any]) -> Bool {
+        let info = job["metadata"] as? [String:Any] ?? [:], d = UserDefaults.standard
+        let mode = d.string(forKey:"WJConnectionMode") ?? "manual"
+        guard (info["connectionMode"] as? String ?? "manual") == mode,
+              (info["connectionGeneration"] as? String ?? "") == (d.string(forKey:"WJConnectionGeneration") ?? "") else { return false }
+        if mode == "automatic" {
+            let peer = job["peer"] as? String ?? ""
+            if !peer.isEmpty && !discovery.registeredPeers.contains(where: { $0["id"] == peer }) { return false }
+            return info["groupID"] as? String == d.string(forKey:"WJCameraGroupID")
+        }
+        return true
+    }
     public override init() {
         super.init()
         recover()
@@ -85,9 +116,13 @@ import Network
         discovery.configure(receiving:receiving, browsing:browsing)
     }
     @objc public func enqueue(_ url: URL, metadata: [String: Any]) {
+        let metadata = scoped(metadata)
         guard let id = metadata["id"] as? String else { return }
         let registered = discovery.registeredPeers.compactMap { $0["id"] }.filter { !$0.isEmpty }
-        let targets = registered.isEmpty ? [metadata["peer"] as? String ?? discovery.selectedID] : registered
+        if UserDefaults.standard.string(forKey:"WJConnectionMode") == "automatic", UserDefaults.standard.string(forKey:"WJGroupRole") == "MAIN", registered.isEmpty { return }
+        let targets = registered.isEmpty ? [discovery.selectedID] : registered
+        var saved = metadata; saved["transferRequested"] = true; saved["transferComplete"] = false; saved["completedPeers"] = [String]()
+        if let data = try? JSONSerialization.data(withJSONObject:saved) { try? data.write(to:url.appendingPathExtension("wj.json"),options:.atomic) }
         for peer in targets where !jobs.contains(where: { ($0["id"] as? String) == id && ($0["peer"] as? String ?? "") == peer }) {
             jobs.append(["id":id, "file":url.lastPathComponent, "metadata":metadata, "peer":peer])
         }
@@ -101,11 +136,13 @@ import Network
               var info = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let id = info["id"] as? String, UUID(uuidString: id) != nil,
               FileManager.default.fileExists(atPath: url.path) else { return }
+        info = scoped(info)
         info["transferRequested"] = true
-        info["transferComplete"] = false
+        info["transferComplete"] = false; info["completedPeers"] = [String]()
+        if let data = try? JSONSerialization.data(withJSONObject:info) { try? data.write(to:url.appendingPathExtension("wj.json"),options:.atomic) }
         jobs.removeAll { ($0["id"] as? String) == id }
         let registered = discovery.registeredPeers.compactMap { $0["id"] }.filter { !$0.isEmpty }
-        let targets = registered.isEmpty ? [info["peer"] as? String ?? discovery.selectedID] : registered
+        let targets = registered.isEmpty ? [discovery.selectedID] : registered
         for peer in targets { jobs.append(["id": id, "file": url.lastPathComponent, "metadata": info, "peer": peer]) }
         _ = persist()
         state = "WAITING_TRANSFER"; message = "再転送待ち"; changed?(); pump()
@@ -125,9 +162,10 @@ import Network
         DispatchQueue.main.async { self.state = state; self.message = message; self.progress = progress; self.changed?() }
     }
     private func pump() {
-        guard enabled, activeID == nil, let job = jobs.first, let id = job["id"] as? String,
+        guard enabled, activeID == nil, let job = jobs.first(where:{ eligible($0) }), let id = job["id"] as? String,
               let filename = job["file"] as? String, let info = job["metadata"] as? [String: Any] else { return }
         let peer = (job["peer"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? discovery.selectedID
+        if UserDefaults.standard.string(forKey:"WJConnectionMode") == "automatic", !discovery.registeredPeers.contains(where:{$0["id"] == peer}) { return }
         guard let connection = discovery.connection(to: peer) else {
             state = "TRANSFER_FAILED"; message = "転送先が未接続です。同じWi-Fiで受信待機をONにし、再送してください。"; changed?(); return
         }
@@ -143,13 +181,13 @@ import Network
         activeFilename = url.lastPathComponent
         activePeer = peer
         // Bind an initially unregistered job once; later destination changes never reroute it.
-        if (jobs[0]["peer"] as? String ?? "").isEmpty {
-            jobs[0]["peer"] = peer
+        if let index = jobs.firstIndex(where:{$0["id"] as? String == id && ($0["peer"] as? String ?? "").isEmpty}) {
+            jobs[index]["peer"] = peer
             var boundInfo = info; boundInfo["peer"] = peer
             do {
                 let sidecar = url.appendingPathExtension("wj.json")
                 try JSONSerialization.data(withJSONObject:boundInfo).write(to:sidecar, options:.atomic)
-                jobs[0]["metadata"] = boundInfo
+                jobs[index]["metadata"] = boundInfo
                 guard persist() else { return }
             } catch { state = "TRANSFER_FAILED"; message = "転送先を保存できません"; changed?(); return }
         }
@@ -159,7 +197,7 @@ import Network
             return (url: url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + suffix), suffix: suffix, size: size)
         }
         relatedIndex = 0; try? relatedHandle?.close(); relatedHandle = nil
-        var transferInfo = info; transferInfo["relatedFiles"] = related
+        var transferInfo = info; transferInfo["relatedFiles"] = related; transferInfo["senderID"] = discovery.deviceID
         activeID = id; state = "TRANSFERRING"; message = "iPadへ転送中..."; progress = 0; changed?()
         io.async {
             let wire = TransferChannel(connection, queue:self.io); self.channel = wire
@@ -184,14 +222,7 @@ import Network
             sendRelated(id, info: info) {
                 wire.receiveJSON { response in
                 if response["state"] as? String == "TRANSFERRED", response["id"] as? String == id {
-                    do {
-                        let filename = self.activeFilename ?? (id + ".mov")
-                        let sidecar = ReceivedVideoManager.directory.appendingPathComponent(filename).appendingPathExtension("wj.json")
-                        var metadata = try JSONSerialization.jsonObject(with:Data(contentsOf:sidecar)) as! [String:Any]
-                        metadata["transferComplete"] = true
-                        try JSONSerialization.data(withJSONObject:metadata).write(to:sidecar, options:.atomic)
-                        self.finish(id, error:nil)
-                    } catch { wire.fail(error) }
+                    self.finish(id, error:nil)
                 }
                 else { wire.fail(ReceivedVideoManager.failure(response["error"] as? String ?? "受信完了を確認できません。再送してください。")) }
                 }
@@ -224,12 +255,24 @@ import Network
         } catch { wire.fail(error) }
     }
     private func finish(_ id: String, error: Error?) {
+        let finishedFilename = activeFilename ?? (id + ".mov")
         channel?.close(); channel = nil; try? input?.close(); input = nil; try? relatedHandle?.close(); relatedHandle = nil; relatedInputs.removeAll(); relatedIndex = 0; activeFilename = nil
         DispatchQueue.main.async {
             guard self.activeID == id else { return }
             if let error = error { self.state = "TRANSFER_FAILED"; self.message = "転送失敗: \(error.localizedDescription) 元動画は保存済みです。" }
             else {
                 let destination = self.activePeer ?? ""
+                do {
+                    let sidecar = ReceivedVideoManager.directory.appendingPathComponent(finishedFilename).appendingPathExtension("wj.json")
+                    var metadata = try JSONSerialization.jsonObject(with:Data(contentsOf:sidecar)) as! [String:Any]
+                    var completed = metadata["completedPeers"] as? [String] ?? []
+                    if !completed.contains(destination) { completed.append(destination) }
+                    metadata["completedPeers"] = completed
+                    metadata["transferComplete"] = !self.jobs.contains { $0["id"] as? String == id && ($0["peer"] as? String ?? "") != destination }
+                    try JSONSerialization.data(withJSONObject:metadata).write(to:sidecar,options:.atomic)
+                } catch {
+                    self.activeID = nil; self.activePeer = nil; self.state = "TRANSFER_FAILED"; self.message = "転送完了情報を保存できません。動画は保持しています。"; self.changed?(); return
+                }
                 self.jobs.removeAll { ($0["id"] as? String) == id && ($0["peer"] as? String ?? "") == destination }
                 self.state = self.jobs.isEmpty ? "TRANSFERRED" : "WAITING_TRANSFER"; self.message = self.jobs.isEmpty ? "転送完了" : "次の受信端末へ転送待ち"; self.progress = 1
             }

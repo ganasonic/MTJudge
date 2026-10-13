@@ -1,10 +1,19 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 import AVFoundation
 import CryptoKit
 
 @available(iOS 13.0, *)
 @objc public final class ReceivedVideoManager: NSObject {
+    private static var deviceName: String {
+        #if canImport(UIKit)
+        return UIDevice.current.name
+        #else
+        return ProcessInfo.processInfo.hostName
+        #endif
+    }
     static let io = DispatchQueue(label: "MTJudge.videoStore", qos: .utility)
     static var testDirectory: URL?
     static var directory: URL {
@@ -31,7 +40,7 @@ import CryptoKit
             codec = String(bytes: [UInt8((fourcc >> 24) & 255), UInt8((fourcc >> 16) & 255), UInt8((fourcc >> 8) & 255), UInt8(fourcc & 255)], encoding: .ascii) ?? "unknown"
         }
         let start = UserDefaults.standard.double(forKey: "WJRecordingStartTime")
-        return ["version":1, "id":id, "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "cameraName":UserDefaults.standard.string(forKey:"WJCameraName") ?? UIDevice.current.name, "groupID":UserDefaults.standard.string(forKey:"WJCameraGroupID") ?? "", "recordingStart": start > 0 ? start : Date().timeIntervalSince1970, "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
+        return ["version":1, "id":id, "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "cameraName":UserDefaults.standard.string(forKey:"WJCameraName") ?? deviceName, "groupID":UserDefaults.standard.string(forKey:"WJCameraGroupID") ?? "", "recordingStart": start > 0 ? start : Date().timeIntervalSince1970, "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
                 "width":abs(track.naturalSize.width), "height":abs(track.naturalSize.height), "fps":track.nominalFrameRate,
                 "bitrate":track.estimatedDataRate, "codec":codec, "created":Date().timeIntervalSince1970]
     }
@@ -68,9 +77,10 @@ import CryptoKit
                 } while index < 10000
                 if files.fileExists(atPath: final.path) { throw failure("同名動画が多すぎるため保存できません。") }
             }
-        } else {
-            let actual = try metadataForValidation(source)
-            guard actual == size.int64Value, try digest(source) == expected else { throw failure("受信した動画のサイズまたはハッシュが一致しません。再送してください。") }
+        }
+        let actual = try metadataForValidation(source)
+        guard actual == size.int64Value, try digest(source) == expected else { throw failure("受信した動画のサイズまたはハッシュが一致しません。再送してください。") }
+        if !files.fileExists(atPath:final.path) {
             let temp = directory.appendingPathComponent(UUID().uuidString + ".partial")
             do { try files.copyItem(at: source, to: temp); try files.moveItem(at: temp, to: final) }
             catch { try? files.removeItem(at: temp); throw error }
@@ -85,6 +95,31 @@ import CryptoKit
         let asset = AVURLAsset(url: url)
         guard !asset.tracks(withMediaType: .video).isEmpty, CMTimeGetSeconds(asset.duration).isFinite, CMTimeGetSeconds(asset.duration) > 0 else { throw failure("受信ファイルが再生可能な動画ではありません。") }
         return Int64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+    }
+    // Photo picker URLs are temporary. Finish the durable import before closing
+    // the picker or letting the player write annotations beside the movie.
+    @objc public static func importPhotoVideo(_ source: URL, completion: @escaping (URL?, NSError?) -> Void) {
+        io.async {
+            do {
+                let id = UUID().uuidString
+                var info = try metadata(source, id: id, tags: [])
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.dateFormat = "yyyyMMddHHmmssSSS"
+                let stem = "MTJ" + formatter.string(from: Date())
+                var filename = stem + ".MOV"
+                if FileManager.default.fileExists(atPath: directory.appendingPathComponent(filename).path) {
+                    filename = stem + "_" + id + ".MOV"
+                }
+                info["filename"] = filename
+                info["imported"] = true
+                info["transferRequested"] = false
+                let saved = try commit(source, metadata: info)
+                DispatchQueue.main.async { completion(saved, nil) }
+            } catch {
+                DispatchQueue.main.async { completion(nil, error as NSError) }
+            }
+        }
     }
     @objc public static func saveAutomatic(_ source: URL, completion: @escaping (URL?, [String: Any]?, NSError?) -> Void) {
         io.async {
@@ -104,12 +139,55 @@ import CryptoKit
                 info["filename"] = sourceName.hasPrefix("MTJ") ? sourceName + ".MOV" : "MTJ" + formatter.string(from: Date()) + ".MOV"
                 let isSubCamera = (info["cameraRole"] as? String) == "SUB_CAMERA"
                 info["transferRequested"] = UserDefaults.standard.bool(forKey:"WJTransfer") && (isSubCamera || !UserDefaults.standard.bool(forKey:"WJTagBeforeTransfer"))
+                if UserDefaults.standard.string(forKey:"WJConnectionMode") == "automatic", UserDefaults.standard.string(forKey:"WJGroupRole") == "MAIN", (UserDefaults.standard.array(forKey:"WJPeerRegistrations") ?? []).isEmpty { info["transferRequested"] = false }
                 info["peer"] = UserDefaults.standard.string(forKey:"WJPeerID") ?? ""
+                info["connectionMode"] = UserDefaults.standard.string(forKey:"WJConnectionMode") ?? "manual"
+                info["connectionGeneration"] = UserDefaults.standard.string(forKey:"WJConnectionGeneration") ?? ""
+                info["groupID"] = UserDefaults.standard.string(forKey:"WJCameraGroupID") ?? ""
+                info["cameraNumber"] = UserDefaults.standard.string(forKey:"WJGroupRole") ?? ""
                 let saved = try commit(source, metadata: info)
                 // The temporary original is intentionally retained if any operation fails.
                 DispatchQueue.main.async { completion(saved, info, nil) }
             } catch { DispatchQueue.main.async { completion(nil, nil, error as NSError) } }
         }
+    }
+    // A container's absolute path can change after an app update. Prefer the
+    // video's persistent ID, with a filename fallback for legacy exports.
+    @objc public static func videoIdentity(_ url: URL) -> String {
+        if let data = try? Data(contentsOf: url.appendingPathExtension("wj.json")),
+           let info = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let id = info["id"] as? String, UUID(uuidString: id) != nil {
+            return "id:" + id
+        }
+        return "file:" + url.lastPathComponent
+    }
+    @objc public static func isFavoriteVideo(_ url: URL) -> Bool {
+        let defaults = UserDefaults.standard
+        let identity = videoIdentity(url)
+        var ids = defaults.stringArray(forKey: "WJFavoriteVideoIDs") ?? []
+        if ids.contains(identity) { return true }
+        let oldPaths = defaults.stringArray(forKey: "WJFavoriteVideoPaths") ?? []
+        if oldPaths.contains(where: { URL(fileURLWithPath: $0).lastPathComponent == url.lastPathComponent }) {
+            ids.append(identity)
+            defaults.set(ids, forKey: "WJFavoriteVideoIDs")
+            return true
+        }
+        return false
+    }
+    @objc public static func setFavoriteVideo(_ url: URL, favorite: Bool) {
+        let defaults = UserDefaults.standard
+        let identity = videoIdentity(url)
+        var ids = defaults.stringArray(forKey: "WJFavoriteVideoIDs") ?? []
+        ids.removeAll { $0 == identity }
+        if favorite { ids.append(identity) }
+        defaults.set(ids, forKey: "WJFavoriteVideoIDs")
+        // Remove legacy entries even when switching off, so migration cannot
+        // unexpectedly resurrect a favorite on the next read.
+        let oldPaths = (defaults.stringArray(forKey: "WJFavoriteVideoPaths") ?? []).filter {
+            URL(fileURLWithPath: $0).lastPathComponent != url.lastPathComponent
+        }
+        defaults.set(oldPaths, forKey: "WJFavoriteVideoPaths")
+        NotificationCenter.default.post(name: Notification.Name("WJVideoFavoritesChanged"), object: url)
     }
     @objc public static func videos() -> [URL] {
         // 旧バージョンの自動録画先を、現在の受信動画と同じRecordingsへ移行する。

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D032C97F924E49AB90C52F02 /* MTJudge/WaterJump/CameraGroupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D032C97F924E49AB90C52F01; };
 		0E03748822A4C09500E4D686 /* MeasureViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 0E03748722A4C09500E4D686 /* MeasureViewController.m */; };
 		0E03748B22A4C3F200E4D686 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0E03748A22A4C3F200E4D686 /* CoreMotion.framework */; };
 		0E06012C22A749C7009AE206 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0E06012B22A749C7009AE206 /* CoreLocation.framework */; };
@@ -57,6 +58,8 @@
 		87748C9C4BD85B9F777BADC7 /* MTJudge/WaterJump/VideoTransferManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */; };
 		91E3FA2906F83913E858C98F /* MTJudge/WaterJump/WaterJumpCoordinator.m in Sources */ = {isa = PBXBuildFile; fileRef = F5488A591BB841A18E19583F /* MTJudge/WaterJump/WaterJumpCoordinator.m */; };
 		A1B2C3D40000000000000001 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* SceneDelegate.m */; };
+		AB7010000000000000000002 /* MTJLocalization.m in Sources */ = {isa = PBXBuildFile; fileRef = AB7010000000000000000001 /* MTJLocalization.m */; };
+		AB7010000000000000000004 /* MTJLanguages.json in Resources */ = {isa = PBXBuildFile; fileRef = AB7010000000000000000003 /* MTJLanguages.json */; };
 		B1C2D3E40000000000000001 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000003 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m */; };
 		B1C2D3E40000000000000011 /* MTJudge/Analysis/PoseAnalyzer.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000013 /* MTJudge/Analysis/PoseAnalyzer.m */; };
 		B1C2D3E40000000000000012 /* MTJudge/Analysis/VideoPoseAnalysisManager.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000014 /* MTJudge/Analysis/VideoPoseAnalysisManager.m */; };
@@ -127,6 +130,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D032C97F924E49AB90C52F01 /* MTJudge/WaterJump/CameraGroupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/CameraGroupManager.swift; sourceTree = SOURCE_ROOT; };
 		0242E7CD0435FA28BD767208 /* MTJudge/WaterJump/WatchRemoteController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WatchRemoteController.h; sourceTree = SOURCE_ROOT; };
 		038F090FE639BE252399DB15 /* MTJudgeWatch/MTJudgeWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudgeWatch/MTJudgeWatchApp.swift; sourceTree = SOURCE_ROOT; };
 		038F0910E639BE252399DB15 /* MTJudgeWatch/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MTJudgeWatch/Assets.xcassets; sourceTree = SOURCE_ROOT; };
@@ -201,6 +205,9 @@
 		A1B2C3D40000000000000002 /* SceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; };
 		A1B2C3D40000000000000003 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
 		A52C62819DACD06DA9A2B113 /* MTJudge/WaterJump/WaterJumpSettingsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpSettingsViewController.h; sourceTree = SOURCE_ROOT; };
+		AB7010000000000000000001 /* MTJLocalization.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJLocalization.m; sourceTree = "<group>"; };
+		AB7010000000000000000003 /* MTJLanguages.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MTJLanguages.json; sourceTree = "<group>"; };
+		AB7010000000000000000005 /* MTJLocalization.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJLocalization.h; sourceTree = "<group>"; };
 		B1C2D3E40000000000000002 /* MTJudge/WaterJump/WaterJumpComparisonViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpComparisonViewController.h; sourceTree = SOURCE_ROOT; };
 		B1C2D3E40000000000000003 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpComparisonViewController.m; sourceTree = SOURCE_ROOT; };
 		B1C2D3E40000000000000013 /* MTJudge/Analysis/PoseAnalyzer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/PoseAnalyzer.m; sourceTree = SOURCE_ROOT; };
@@ -314,6 +321,7 @@
 				83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */,
 				7263AFC553342BD3E2F12ABF /* MTJudge/WaterJump/TransferChannel.swift */,
 				2C90D5632784C7447A594CA3 /* MTJudge/WaterJump/ReceivedVideoManager.swift */,
+				D032C97F924E49AB90C52F01 /* MTJudge/WaterJump/CameraGroupManager.swift */,
 				FB05D305E2AAB63DC4A20226 /* MTJudge/WaterJump/PeerDiscoveryManager.swift */,
 				9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */,
 				0242E7CD0435FA28BD767208 /* MTJudge/WaterJump/WatchRemoteController.h */,
@@ -391,6 +399,9 @@
 				0E03748722A4C09500E4D686 /* MeasureViewController.m */,
 				0E35987222655BF00093671C /* TouchDrawingView.m */,
 				0E359831226550C80093671C /* AppDelegate.h */,
+				AB7010000000000000000005 /* MTJLocalization.h */,
+				AB7010000000000000000001 /* MTJLocalization.m */,
+				AB7010000000000000000003 /* MTJLanguages.json */,
 				0E359832226550C80093671C /* AppDelegate.m */,
 				0E35983A226550C80093671C /* Main.storyboard */,
 				CA0A3CB22E5154300028E396 /* SettingViewController.m */,
@@ -598,6 +609,7 @@
 				0EBEBA1922659344001C91BD /* アイコン60x60.jpg in Resources */,
 				0EBEBA1322659344001C91BD /* アイコン152x152.jpg in Resources */,
 				CAF09A3D2E64626F000CAC92 /* data.json in Resources */,
+				AB7010000000000000000004 /* MTJLanguages.json in Resources */,
 				0E06657222A65A6100650923 /* degree.png in Resources */,
 				0E6EE6C32267F994005DCB7A /* 背景画1242x2208@.jpg in Resources */,
 				0EBEBA262265946C001C91BD /* turn3.png in Resources */,
@@ -658,6 +670,7 @@
 				87748C9C4BD85B9F777BADC7 /* MTJudge/WaterJump/VideoTransferManager.swift in Sources */,
 				624D455F6183D1D2354BBA42 /* MTJudge/WaterJump/TransferChannel.swift in Sources */,
 				42764D620D6CECE298CC315E /* MTJudge/WaterJump/ReceivedVideoManager.swift in Sources */,
+				D032C97F924E49AB90C52F02 /* MTJudge/WaterJump/CameraGroupManager.swift in Sources */,
 				E1727CFF3F381B863DF9A165 /* MTJudge/WaterJump/PeerDiscoveryManager.swift in Sources */,
 				D7E05DFE6A6C28C4E399AF1D /* MTJudge/WaterJump/WatchRemoteController.m in Sources */,
 				91E3FA2906F83913E858C98F /* MTJudge/WaterJump/WaterJumpCoordinator.m in Sources */,
@@ -668,6 +681,7 @@
 				CA0A3CB32E5154300028E396 /* SettingViewController.m in Sources */,
 				0E35987B22656A260093671C /* ReductionViewControler.m in Sources */,
 				0E359833226550C80093671C /* AppDelegate.m in Sources */,
+				AB7010000000000000000002 /* MTJLocalization.m in Sources */,
 				A1B2C3D40000000000000001 /* SceneDelegate.m in Sources */,
 				B1C2D3E40000000000000001 /* MTJudge/WaterJump/WaterJumpComparisonViewController.m in Sources */,
 				B1C2D3E40000000000000011 /* MTJudge/Analysis/PoseAnalyzer.m in Sources */,
@@ -889,7 +903,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25.3;
+				CURRENT_PROJECT_VERSION = 25.5;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = (
 					PICKER_AIR_DATA_FROM_JSON,
 					"$(inherited)",
@@ -903,7 +917,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 5.3;
+				MARKETING_VERSION = 5.5;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -920,7 +934,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25.3;
+				CURRENT_PROJECT_VERSION = 25.5;
 				DEVELOPMENT_TEAM = UM9N74S758;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = PICKER_AIR_DATA_FROM_JSON;
 				INFOPLIST_FILE = MTJudge/Info.plist;
@@ -932,7 +946,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 5.3;
+				MARKETING_VERSION = 5.5;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
