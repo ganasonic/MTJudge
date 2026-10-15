@@ -192,7 +192,7 @@ void MTJLocalizeController(UIViewController *controller) {
 + (NSString *)language {
     NSString *saved = [NSUserDefaults.standardUserDefaults stringForKey:@"MTJLanguage"];
     if ([saved isEqual:@"ja"] || [saved isEqual:@"en"]) return saved;
-    return [NSLocale.preferredLanguages.firstObject hasPrefix:@"ja"] ? @"ja" : @"en";
+    return @"en";
 }
 + (NSURL *)editableURL {
     return [[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"MTJLanguages.json"];

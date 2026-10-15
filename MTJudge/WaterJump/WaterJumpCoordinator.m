@@ -13,10 +13,13 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 @property (nonatomic, strong) NSTimer *groupRefreshTimer;
 @property (nonatomic, strong) WatchRemoteController *watch;
 @property (nonatomic, strong) VideoTransferManager *transfer;
-@property (nonatomic, strong) WaterJumpReceivedPlayerViewController *receivedPlayer;
+@property (nonatomic, weak) WaterJumpReceivedPlayerViewController *receivedPlayer;
 @property (nonatomic, strong) NSURL *waitingReceivedURL;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSURL *> *> *receivedSessions;
-@property (nonatomic, strong) WaterJumpComparisonViewController *comparisonPlayer;
+@property (nonatomic, weak) WaterJumpComparisonViewController *comparisonPlayer;
+@property (nonatomic, strong) NSURL *pendingPlaybackURL;
+@property (nonatomic, strong) NSURL *pendingComparisonURL;
+@property (nonatomic) BOOL playbackTransitionInProgress;
 @end
 @implementation WaterJumpCoordinator
 - (UIViewController *)activePresentationHost {
@@ -40,17 +43,76 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
     if (!mainURL || !subURL || [mainURL.path isEqualToString:subURL.path]) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *presenter = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];
-        if (!presenter) return;
-        self.comparisonPlayer = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:subURL];
-        void (^present)(void) = ^{
-            [presenter presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
-        };
-        if (self.receivedPlayer.presentingViewController) [self.receivedPlayer dismissViewControllerAnimated:NO completion:present];
-        else if (presenter.presentedViewController && presenter.presentedViewController != self.comparisonPlayer) {
-            [presenter dismissViewControllerAnimated:NO completion:present];
-        } else present();
+        self.waitingReceivedURL = nil;
+        self.pendingPlaybackURL = mainURL;
+        self.pendingComparisonURL = subURL;
+        [self drainPendingPlayback];
     });
+}
+// All autoplay paths share one serialized dismissal/presentation operation.
+// During a transition only the latest received request is retained.
+- (void)drainPendingPlayback {
+    if (self.playbackTransitionInProgress || !self.pendingPlaybackURL) return;
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) {
+        self.pendingPlaybackURL = nil; self.pendingComparisonURL = nil; return;
+    }
+    if (self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    UIViewController *top = [self activePresentationHost];
+    if (!top) return;
+    BOOL transitioning = NO;
+    UIViewController *oldPlayer = nil;
+    for (UIViewController *vc = top; vc; vc = vc.presentingViewController) {
+        transitioning |= vc.isBeingPresented || vc.isBeingDismissed || vc.transitionCoordinator != nil;
+        if ([vc isKindOfClass:WaterJumpReceivedPlayerViewController.class] ||
+            [vc isKindOfClass:WaterJumpComparisonViewController.class]) oldPlayer = vc;
+    }
+    if (transitioning || [top isKindOfClass:UIAlertController.class]) {
+        self.playbackTransitionInProgress = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            self.playbackTransitionInProgress = NO; [self drainPendingPlayback];
+        });
+        return;
+    }
+    UIViewController *host = oldPlayer.presentingViewController ?: top;
+    self.playbackTransitionInProgress = YES;
+    void (^presentNext)(void) = ^{
+        NSURL *url = self.pendingPlaybackURL, *subURL = self.pendingComparisonURL;
+        self.pendingPlaybackURL = nil; self.pendingComparisonURL = nil;
+        self.receivedPlayer = nil; self.comparisonPlayer = nil;
+        if (!url || host.presentedViewController || !host.view.window ||
+            ![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"] ||
+            UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+            self.pendingPlaybackURL = url; self.pendingComparisonURL = subURL;
+            self.playbackTransitionInProgress = NO;
+            return;
+        }
+        UIViewController *next;
+        if (subURL) {
+            WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:url subURL:subURL];
+            self.comparisonPlayer = comparison; next = comparison;
+        } else {
+            WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url];
+            NSArray<NSURL *> *videos = [ReceivedVideoManager videos];
+            NSUInteger index = [videos indexOfObject:url];
+            [player setPlaylist:index == NSNotFound ? @[url] : videos currentIndex:index == NSNotFound ? 0 : index];
+            player.modalPresentationStyle = UIModalPresentationFullScreen;
+            player.modalPresentationCapturesStatusBarAppearance = YES;
+            self.receivedPlayer = player; next = player;
+        }
+        [host presentViewController:next animated:YES completion:^{
+            if ([next isKindOfClass:WaterJumpComparisonViewController.class]) [(WaterJumpComparisonViewController *)next startPlayback];
+            self.playbackTransitionInProgress = NO;
+            [self drainPendingPlayback];
+        }];
+    };
+    if (oldPlayer) {
+        // Also stop any playback screens left in a pre-existing modal chain.
+        for (UIViewController *vc = oldPlayer; vc; vc = vc.presentedViewController) {
+            if ([vc isKindOfClass:WaterJumpReceivedPlayerViewController.class]) [(WaterJumpReceivedPlayerViewController *)vc prepareForAutoplayReplacement];
+            if ([vc isKindOfClass:WaterJumpComparisonViewController.class]) [(WaterJumpComparisonViewController *)vc prepareForAutoplayReplacement];
+        }
+        [host dismissViewControllerAnimated:NO completion:presentNext];
+    } else presentNext();
 }
 + (instancetype)shared { static id instance; static dispatch_once_t once; dispatch_once(&once, ^{ instance = [self new]; }); return instance; }
 - (instancetype)init {
@@ -168,24 +230,13 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         if (mainURL && subURL) {
             if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
             [self.receivedSessions removeObjectForKey:sessionID];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                UIViewController *host = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];
-                if (!host) return;
-                self.comparisonPlayer = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:subURL];
-                void (^presentComparison)(void) = ^{
-                    if (!host.presentedViewController || host.presentedViewController.isBeingDismissed) {
-                        [host presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
-                    }
-                };
-                if (self.receivedPlayer.presentingViewController) [self.receivedPlayer dismissViewControllerAnimated:NO completion:presentComparison];
-                else presentComparison();
-            });
+            [self presentComparisonMainURL:mainURL subURL:subURL];
             return;
         }
         if ([role isEqualToString:@"MAIN_CAMERA"]) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 NSDictionary *current = self.receivedSessions[sessionID];
-                if (current[@"SUB_CAMERA"]) return;
+                if (!current || current[@"SUB_CAMERA"]) return;
                 self.waitingReceivedURL = current[@"MAIN_CAMERA"] ?: url;
                 // 先に届いたメイン動画は一旦表示するが、サブ動画が遅れて届いた場合に
                 // 比較画面へ切り替えられるよう、セッション情報は短時間保持する。
@@ -209,7 +260,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     if (@available(iOS 13.0, *)) [self.transfer suspend];
     UIApplication.sharedApplication.idleTimerDisabled = NO;
 }
-- (void)foreground { [self applySettings]; [self displayReceived]; }
+- (void)foreground { [self applySettings]; [self displayReceived]; [self drainPendingPlayback]; }
 - (BOOL)protectsVideo:(NSURL *)url { if (!url) return NO; if (@available(iOS 13.0, *)) return [self.transfer protects:url]; return NO; }
 - (BOOL)recordingBusy { return self.recording.busy; }
 - (BOOL)communicationBusy { return self.transfer.communicationBusy; }
@@ -226,34 +277,12 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         self.waitingReceivedURL = nil;
         return;
     }
-    if (!self.waitingReceivedURL || self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
-    UIViewController *host = [self activePresentationHost];
-    if (!host) return;
-    while (host.presentedViewController && host.presentedViewController != self.receivedPlayer) host = host.presentedViewController;
-    if ([host isKindOfClass:UIAlertController.class] || host.isBeingDismissed) return;
-    WaterJumpReceivedPlayerViewController *player = self.receivedPlayer;
-    NSURL *url = self.waitingReceivedURL; self.waitingReceivedURL = nil;
-    NSArray<NSURL *> *videos = @[];
-    NSInteger currentIndex = 0;
-    if (@available(iOS 13.0, *)) {
-        videos = [ReceivedVideoManager videos];
-        NSUInteger found = [videos indexOfObject:url];
-        if (found != NSNotFound) currentIndex = (NSInteger)found;
-    }
-    if (player && player.presentingViewController) {
-        [player setPlaylist:videos.count ? videos : @[url] currentIndex:currentIndex];
-        [player replaceVideoURL:url];
-    }
-    else {
-        player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url]; self.receivedPlayer = player;
-        [player setPlaylist:videos.count ? videos : @[url] currentIndex:currentIndex];
-        player.modalPresentationStyle = UIModalPresentationFullScreen;
-        player.modalPresentationCapturesStatusBarAppearance = YES;
-        [host presentViewController:player animated:YES completion:nil];
-    }
-#if DEBUG
-    NSLog(@"[iPad] latest video displayed: %@", url.lastPathComponent);
-#endif
+    if (!self.waitingReceivedURL) { [self drainPendingPlayback]; return; }
+    if (self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    self.pendingPlaybackURL = self.waitingReceivedURL;
+    self.pendingComparisonURL = nil;
+    self.waitingReceivedURL = nil;
+    [self drainPendingPlayback];
 }
 - (BOOL)modeEnabled { return [[NSUserDefaults standardUserDefaults] boolForKey:@"WJMode"]; }
 - (NSString *)remoteAddress { return self.server.address; }

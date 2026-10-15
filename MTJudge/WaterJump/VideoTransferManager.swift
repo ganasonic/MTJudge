@@ -127,7 +127,7 @@ import Network
             jobs.append(["id":id, "file":url.lastPathComponent, "metadata":metadata, "peer":peer])
         }
         guard !targets.isEmpty else { return }
-        guard persist() else { return }; state = "WAITING_TRANSFER"; message = "転送待ち \(jobs.count)本"; changed?(); pump()
+        guard persist() else { return }; state = "WAITING_TRANSFER"; message = "転送待ち \(jobs.filter { eligible($0) }.count)件"; changed?(); pump()
     }
     @objc public func retry() { pump() }
     /// 保存済み動画のサイドカーを使って、完了済みの動画も再転送キューへ戻す。
@@ -162,7 +162,16 @@ import Network
         DispatchQueue.main.async { self.state = state; self.message = message; self.progress = progress; self.changed?() }
     }
     private func pump() {
-        guard enabled, activeID == nil, let job = jobs.first(where:{ eligible($0) }), let id = job["id"] as? String,
+        guard enabled, activeID == nil else { return }
+        // Old groups and removed destinations remain recoverable in the journal,
+        // but must not keep the current transfer status waiting indefinitely.
+        guard let job = jobs.first(where: { eligible($0) }) else {
+            if state == "WAITING_TRANSFER" {
+                state = "TRANSFERRED"; message = "転送完了"; progress = 1; changed?()
+            }
+            return
+        }
+        guard let id = job["id"] as? String,
               let filename = job["file"] as? String, let info = job["metadata"] as? [String: Any] else { return }
         let peer = (job["peer"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? discovery.selectedID
         if UserDefaults.standard.string(forKey:"WJConnectionMode") == "automatic", !discovery.registeredPeers.contains(where:{$0["id"] == peer}) { return }
@@ -274,7 +283,10 @@ import Network
                     self.activeID = nil; self.activePeer = nil; self.state = "TRANSFER_FAILED"; self.message = "転送完了情報を保存できません。動画は保持しています。"; self.changed?(); return
                 }
                 self.jobs.removeAll { ($0["id"] as? String) == id && ($0["peer"] as? String ?? "") == destination }
-                self.state = self.jobs.isEmpty ? "TRANSFERRED" : "WAITING_TRANSFER"; self.message = self.jobs.isEmpty ? "転送完了" : "次の受信端末へ転送待ち"; self.progress = 1
+                let remaining = self.jobs.filter { self.eligible($0) }.count
+                self.state = remaining == 0 ? "TRANSFERRED" : "WAITING_TRANSFER"
+                self.message = remaining == 0 ? "転送完了" : "転送待ち \(remaining)件"
+                self.progress = 1
             }
             self.activeID = nil; self.activePeer = nil
             _ = self.persist(); self.changed?(); if error == nil { self.pump() }

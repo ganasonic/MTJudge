@@ -627,7 +627,7 @@ static NSString *WJRoleTitle(NSString *role) {
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (!self.easy || section != 0) return nil;
-    return MTJText(@"メイン＋カメラ1〜3の最大4台。受信はメイン＋追加1台の最大2台です。同じWi-Fiでアプリを前景にし、ローカルネットワークを許可してください。撮影端末は接続後にカメラ画面を開いてください。");
+    return MTJText(@"メイン＋カメラ1〜3の最大4台。受信はメイン＋追加3台の最大4台です。同じWi-Fiでアプリを前景にし、ローカルネットワークを許可してください。撮影端末は接続後にカメラ画面を開いてください。");
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];

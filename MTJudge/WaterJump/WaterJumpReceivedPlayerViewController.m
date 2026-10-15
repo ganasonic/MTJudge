@@ -637,6 +637,17 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }];
 }
 
+- (void)prepareForAutoplayReplacement {
+    [self.player pause];
+    self.loopEnabled = NO; self.automaticLoopLimit = 0;
+    [self.player.currentItem cancelPendingSeeks];
+    [self.speedHideTimer invalidate]; self.speedHideTimer = nil;
+    self.closeHandler = nil; self.playbackEndedHandler = nil;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    if (self.playbackTimeObserver) { [self.player removeTimeObserver:self.playbackTimeObserver]; self.playbackTimeObserver = nil; }
+    self.player = nil;
+}
+
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self.speedHideTimer invalidate];

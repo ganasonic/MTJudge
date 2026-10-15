@@ -6,6 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WaterJumpComparisonViewController : UIViewController
 - (instancetype)initWithMainURL:(NSURL *)mainURL subURL:(NSURL *)subURL;
 - (void)startPlayback;
+- (void)prepareForAutoplayReplacement;
 @end
 
 NS_ASSUME_NONNULL_END

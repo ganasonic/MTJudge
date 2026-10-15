@@ -433,5 +433,13 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     [ReceivedVideoManager setFavoriteVideo:self.subURL favorite:!selected];
     [self refreshFavorites];
 }
+- (void)prepareForAutoplayReplacement {
+    [self.mainPlayer pause]; [self.subPlayer pause];
+    self.loopEnabled = NO; self.loopSeekInProgress = NO;
+    self.automaticLoopLimit = 0;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    if (self.observer) { [self.mainPlayer removeTimeObserver:self.observer]; self.observer = nil; }
+}
+
 - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; }
 @end

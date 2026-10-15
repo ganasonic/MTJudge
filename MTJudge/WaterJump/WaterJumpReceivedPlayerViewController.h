@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithVideoURL:(NSURL *)url;
 - (void)replaceVideoURL:(NSURL *)url;
 - (void)setPlaylist:(NSArray<NSURL *> *)playlist currentIndex:(NSInteger)index;
+- (void)prepareForAutoplayReplacement;
 @end
 
 NS_ASSUME_NONNULL_END

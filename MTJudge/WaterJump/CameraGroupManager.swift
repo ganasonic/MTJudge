@@ -236,8 +236,13 @@ extension CameraGroupManager: MCNearbyServiceBrowserDelegate, MCNearbyServiceAdv
         guard automatic, role == "MAIN", let context = context, context.count <= 4096,
               let request = (try? JSONSerialization.jsonObject(with:context)) as? [String:String],
               request["group"] == groupID, let requested = request["role"], Self.roles.contains(requested), UUID(uuidString:p.displayName) != nil else { invitationHandler(false,nil); return }
-        let collision = roster.contains { $0["role"] == requested && $0["id"] != p.displayName } || invitations.contains { $0.key != p.displayName && $0.value == requested }
-        guard !collision else { message = "役割が重複しています: \(requested)"; changed?(); invitationHandler(false,nil); return }
+        // Count identities, not connections: reconnecting members keep their slot,
+        // and pending approvals reserve slots without counting an identity twice.
+        let occupants = Set(roster.filter { $0["role"] == requested }.compactMap { $0["id"] })
+            .union(invitations.filter { $0.value == requested }.map { $0.key })
+            .subtracting([p.displayName])
+        let collision = occupants.count >= (requested == "RECEIVER" ? 3 : 1)
+        guard !collision else { message = requested == "RECEIVER" ? "追加の受信端末は最大3台です" : "役割が重複しています: \(requested)"; changed?(); invitationHandler(false,nil); return }
         let gid = groupID
         invitations[p.displayName] = requested
         let finish: (Bool) -> Void = { [weak self] approved in
