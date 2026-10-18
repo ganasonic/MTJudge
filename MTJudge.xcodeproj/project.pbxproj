@@ -903,7 +903,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25.6;
+				CURRENT_PROJECT_VERSION = 25.7;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = (
 					PICKER_AIR_DATA_FROM_JSON,
 					"$(inherited)",
@@ -917,7 +917,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 5.6;
+				MARKETING_VERSION = 5.7;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -934,7 +934,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25.6;
+				CURRENT_PROJECT_VERSION = 25.7;
 				DEVELOPMENT_TEAM = UM9N74S758;
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = PICKER_AIR_DATA_FROM_JSON;
 				INFOPLIST_FILE = MTJudge/Info.plist;
@@ -946,7 +946,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 5.6;
+				MARKETING_VERSION = 5.7;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

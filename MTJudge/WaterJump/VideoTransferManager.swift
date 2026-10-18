@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 
 @available(iOS 13.0, *)
 @objc public final class VideoTransferManager: NSObject {
@@ -37,6 +38,7 @@ import Network
         // between local save and queue insertion. Filenames are never remote paths.
         if let data = try? Data(contentsOf:queueURL), let stored = (try? JSONSerialization.jsonObject(with:data)) as? [[String:Any]] { jobs = stored }
         jobs.removeAll { job in
+            if job["cancelled"] as? Bool == true { return false }
             guard let filename = job["file"] as? String,
                   let data = try? Data(contentsOf:ReceivedVideoManager.directory.appendingPathComponent(filename).appendingPathExtension("wj.json")),
                   let info = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else { return false }
@@ -56,15 +58,51 @@ import Network
         // The journal is secondary to each file's durable transfer intent.
         _ = persist()
     }
-    @objc public func protects(_ url: URL) -> Bool { jobs.contains { $0["file"] as? String == url.lastPathComponent } }
+    @objc public func protects(_ url: URL) -> Bool { jobs.contains { $0["cancelled"] as? Bool != true && $0["sourceMissing"] as? Bool != true && $0["file"] as? String == url.lastPathComponent } }
     @objc public func suspend() {
         enabled = false
         configure(receiving:false,browsing:false)
         io.async { self.channel?.fail(ReceivedVideoManager.failure("アプリが前景に戻ったら再送します。")) }
     }
-    @objc public var pendingCount: Int { jobs.count }
+    @objc public var pendingCount: Int { jobs.filter { eligible($0) }.count }
     @objc public var communicationBusy: Bool { activeID != nil || state == "RECEIVING" }
     @objc public var needsRetry: Bool { state == "TRANSFER_FAILED" }
+    private func jobKey(_ job: [String:Any]) -> String {
+        (job["id"] as? String ?? "") + "|" + (job["peer"] as? String ?? "")
+    }
+    @objc public var transferQueueEntries: [[String:Any]] {
+        let d = UserDefaults.standard
+        return jobs.filter { $0["cancelled"] as? Bool != true }.map { job in
+            let info = job["metadata"] as? [String:Any] ?? [:]
+            let peer = job["peer"] as? String ?? ""
+            let registration = discovery.registeredPeers.first { $0["id"] == peer }
+            let sameConfiguration = (info["connectionMode"] as? String ?? "manual") == (d.string(forKey:"WJConnectionMode") ?? "manual") &&
+                (info["connectionGeneration"] as? String ?? "") == (d.string(forKey:"WJConnectionGeneration") ?? "") &&
+                (d.string(forKey:"WJConnectionMode") != "automatic" || info["groupID"] as? String == d.string(forKey:"WJCameraGroupID"))
+            let url = sourceURL(for:job)
+            let active = job["id"] as? String == activeID && peer == activePeer
+            let category = !sameConfiguration ? 1 : (!eligible(job) && job["sourceMissing"] as? Bool != true ? 0 : (url == nil || job["sourceMissing"] as? Bool == true ? 3 : 2))
+            return ["key":jobKey(job), "filename":job["file"] as? String ?? "", "peerID":peer,
+                    "peerName":registration?["name"] ?? (peer.isEmpty ? "未指定" : "登録解除済み／以前の端末"),
+                    "created":info["created"] as? Double ?? 0, "category":category,
+                    "active":active, "path":url?.path ?? "", "missing":url == nil]
+        }
+    }
+    @objc public func removeTransferEntries(_ keys: [String]) -> String? {
+        let selected = Set(keys)
+        guard !jobs.contains(where: { selected.contains(jobKey($0)) && $0["id"] as? String == activeID && ($0["peer"] as? String ?? "") == activePeer }) else {
+            return "転送中の項目は削除できません。転送が終了してから選択してください。"
+        }
+        let previous = jobs
+        // Durable cancellation records prevent recovery from sidecars after relaunch.
+        // Never delete or change the video or its tags and other related files.
+        for index in jobs.indices where selected.contains(jobKey(jobs[index])) {
+            jobs[index]["cancelled"] = true
+            jobs[index]["cancelledAt"] = Date().timeIntervalSince1970
+        }
+        if !persist() { jobs = previous; return message }
+        changed?(); pump(); return nil
+    }
     private func scoped(_ metadata: [String:Any]) -> [String:Any] {
         var result = metadata
         let d = UserDefaults.standard
@@ -75,13 +113,18 @@ import Network
         return result
     }
     private func eligible(_ job: [String:Any]) -> Bool {
+        guard job["cancelled"] as? Bool != true, job["sourceMissing"] as? Bool != true else { return false }
         let info = job["metadata"] as? [String:Any] ?? [:], d = UserDefaults.standard
         let mode = d.string(forKey:"WJConnectionMode") ?? "manual"
         guard (info["connectionMode"] as? String ?? "manual") == mode,
               (info["connectionGeneration"] as? String ?? "") == (d.string(forKey:"WJConnectionGeneration") ?? "") else { return false }
         if mode == "automatic" {
             let peer = job["peer"] as? String ?? ""
-            if !peer.isEmpty && !discovery.registeredPeers.contains(where: { $0["id"] == peer }) { return false }
+            let target = peer.isEmpty ? discovery.selectedID : peer
+            guard !target.isEmpty, discovery.registeredPeers.contains(where: { $0["id"] == target }) else { return false }
+            let role = d.string(forKey:"WJGroupRole") ?? ""
+            let members = d.array(forKey:"WJGroupMembers") as? [[String:String]] ?? []
+            guard members.contains(where: { $0["id"] == target && (role == "MAIN" ? $0["role"] == "RECEIVER" : role.hasPrefix("CAMERA_") && $0["role"] == "MAIN") }) else { return false }
             return info["groupID"] as? String == d.string(forKey:"WJCameraGroupID")
         }
         return true
@@ -161,32 +204,60 @@ import Network
     private func publish(_ state: String, _ message: String, _ progress: Double) {
         DispatchQueue.main.async { self.state = state; self.message = message; self.progress = progress; self.changed?() }
     }
+    // Keep missing jobs recoverable, but never let one missing file block later recordings.
+    private func sourceURL(for job: [String:Any]) -> URL? {
+        let names = [job["file"] as? String, (job["metadata"] as? [String:Any])?["filename"] as? String,
+                     (job["id"] as? String).map { $0 + ".mov" }].compactMap { $0 }
+        for name in names where URL(fileURLWithPath:name).lastPathComponent == name {
+            let url = ReceivedVideoManager.directory.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath:url.path) { return url }
+        }
+        return nil
+    }
+    @objc public var missingSourceFilenames: [String] {
+        Array(Set(jobs.filter { eligible($0) && sourceURL(for:$0) == nil }.compactMap { $0["file"] as? String })).sorted()
+    }
     private func pump() {
-        guard enabled, activeID == nil else { return }
-        // Old groups and removed destinations remain recoverable in the journal,
-        // but must not keep the current transfer status waiting indefinitely.
-        guard let job = jobs.first(where: { eligible($0) }) else {
-            if state == "WAITING_TRANSFER" {
-                state = "TRANSFERRED"; message = "転送完了"; progress = 1; changed?()
+        guard enabled, activeID == nil, UIApplication.shared.isProtectedDataAvailable else { return }
+        // Missing sources are retained as history, not actionable transfer failures.
+        // Explicit requeue from the library creates a fresh job if the video is recovered.
+        let previousJobs = jobs
+        var archivedMissing = false
+        for index in jobs.indices where eligible(jobs[index]) && sourceURL(for:jobs[index]) == nil {
+            jobs[index]["sourceMissing"] = true
+            jobs[index]["sourceMissingAt"] = Date().timeIntervalSince1970
+            archivedMissing = true
+        }
+        if archivedMissing && !persist() { jobs = previousJobs; return }
+        let current = jobs.filter { eligible($0) }
+        guard !current.isEmpty else {
+            if ["WAITING_TRANSFER", "TRANSFER_FAILED", "TRANSFERRED"].contains(state) {
+                state = "IDLE"; message = ""; progress = 0; changed?()
             }
             return
         }
-        guard let id = job["id"] as? String,
-              let filename = job["file"] as? String, let info = job["metadata"] as? [String: Any] else { return }
-        let peer = (job["peer"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? discovery.selectedID
-        if UserDefaults.standard.string(forKey:"WJConnectionMode") == "automatic", !discovery.registeredPeers.contains(where:{$0["id"] == peer}) { return }
-        guard let connection = discovery.connection(to: peer) else {
-            state = "TRANSFER_FAILED"; message = "転送先が未接続です。同じWi-Fiで受信待機をONにし、再送してください。"; changed?(); return
+        var selected: (job:[String:Any], url:URL, peer:String, connection:NWConnection)?
+        var unavailable: [String] = []
+        for job in current {
+            guard let url = sourceURL(for:job) else { continue }
+            let peer = (job["peer"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? discovery.selectedID
+            guard let connection = discovery.connection(to:peer) else { unavailable.append(peer); continue }
+            selected = (job,url,peer,connection); break
         }
+        guard let selected = selected else {
+            state = "TRANSFER_FAILED"
+            if !unavailable.isEmpty {
+                let names = Set(unavailable.map { id in discovery.registeredPeers.first { $0["id"] == id }?["name"] ?? id }).sorted()
+                message = "転送先「\(names.joined(separator:"、"))」の接続待ちです。同じWi-Fiで受信端末のMTJudgeを前景で開いてください。接続後に自動再送します。"
+            } else {
+                state = "IDLE"; message = ""; progress = 0
+            }
+            changed?(); return
+        }
+        let job = selected.job, url = selected.url, peer = selected.peer, connection = selected.connection
+        guard let id = job["id"] as? String, var info = job["metadata"] as? [String:Any] else { return }
+        info["filename"] = url.lastPathComponent
         guard persist() else { return }
-        var url = ReceivedVideoManager.directory.appendingPathComponent(filename)
-        if !FileManager.default.fileExists(atPath: url.path), let legacyID = job["id"] as? String {
-            let legacyURL = ReceivedVideoManager.directory.appendingPathComponent(legacyID).appendingPathExtension("mov")
-            if FileManager.default.fileExists(atPath: legacyURL.path) { url = legacyURL }
-        }
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            state = "TRANSFER_FAILED"; message = "転送元動画が見つかりません。保存動画一覧から再送してください。"; changed?(); return
-        }
         activeFilename = url.lastPathComponent
         activePeer = peer
         // Bind an initially unregistered job once; later destination changes never reroute it.
@@ -268,7 +339,7 @@ import Network
         channel?.close(); channel = nil; try? input?.close(); input = nil; try? relatedHandle?.close(); relatedHandle = nil; relatedInputs.removeAll(); relatedIndex = 0; activeFilename = nil
         DispatchQueue.main.async {
             guard self.activeID == id else { return }
-            if let error = error { self.state = "TRANSFER_FAILED"; self.message = "転送失敗: \(error.localizedDescription) 元動画は保存済みです。" }
+            if let error = error { self.state = "TRANSFER_FAILED"; self.message = "転送失敗（\(finishedFilename)）: \(error.localizedDescription)" }
             else {
                 let destination = self.activePeer ?? ""
                 do {

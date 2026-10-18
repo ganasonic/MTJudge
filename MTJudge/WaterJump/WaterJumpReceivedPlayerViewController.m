@@ -662,11 +662,6 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(playerTapped:)];
     tap.cancelsTouchesInView = NO;
     [self.view addGestureRecognizer:tap];
-    if (self.contentOverlayView) {
-        UITapGestureRecognizer *overlayTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(playerTapped:)];
-        overlayTap.cancelsTouchesInView = NO;
-        [self.contentOverlayView addGestureRecognizer:overlayTap];
-    }
     self.speedControlContainer = [[UIView alloc] init];
     self.speedControlContainer.translatesAutoresizingMaskIntoConstraints = NO;
     self.speedControlContainer.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
@@ -1556,12 +1551,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self showSpeedControls];
         return;
     }
-    if (self.player.rate > 0.0) {
-        [self.player pause];
-        [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
-        self.drawingButton.hidden = NO;
-    }
-    [self showSpeedControls];
+    if (!self.drawingMode || self.player.rate > 0) [self togglePlay:nil];
+    else [self showSpeedControls];
 }
 
 - (NSString *)takeoffSetupInstruction { NSArray *steps = @[@"TAKEOFF設定\n動画上でRamp始点をタップ", @"TAKEOFF設定\n動画上でRamp終点をタップ", @"TAKEOFF設定\n動画上でLip位置をタップ", @"TAKEOFF設定\nサッツ開始フレームでタップ", @"TAKEOFF設定\nリップ離脱フレームでタップ"]; return steps[MAX(0, MIN(self.takeoffSetupStep - 1, (NSInteger)steps.count - 1))]; }
@@ -1716,7 +1707,13 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.player pause];
         [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
     } else {
-        self.player.rate = self.wjSelectedSpeed;
+        double duration = CMTimeGetSeconds(self.player.currentItem.duration);
+        double current = CMTimeGetSeconds(self.player.currentTime);
+        if (isfinite(duration) && duration > 0 && isfinite(current) && current >= duration - 0.05) {
+            [self.player seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+                dispatch_async(dispatch_get_main_queue(), ^{ if (finished) self.player.rate = self.wjSelectedSpeed; });
+            }];
+        } else self.player.rate = self.wjSelectedSpeed;
         [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal];
     }
     self.drawingButton.hidden = !self.drawingMode && self.player.rate > 0;

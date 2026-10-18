@@ -39,8 +39,14 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     while (host.presentedViewController && !host.presentedViewController.isBeingDismissed) host = host.presentedViewController;
     return host;
 }
+- (BOOL)receivedPlaybackAvailable {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"WJReceive"]) return NO;
+    return !self.group.automatic || [self.group.role isEqual:@"MAIN"] || [self.group.role isEqual:@"RECEIVER"];
+}
+- (BOOL)shouldAutoPlayReceived { return self.receivedPlaybackAvailable && [NSUserDefaults.standardUserDefaults boolForKey:@"WJAutoPlayAfterTransfer"]; }
 - (void)presentComparisonMainURL:(NSURL *)mainURL subURL:(NSURL *)subURL {
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"WJCompareAfterTransfer"]) { self.waitingReceivedURL = subURL; [self displayReceived]; return; }
+    if (![self shouldAutoPlayReceived]) return;
     if (!mainURL || !subURL || [mainURL.path isEqualToString:subURL.path]) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         self.waitingReceivedURL = nil;
@@ -53,7 +59,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 // During a transition only the latest received request is retained.
 - (void)drainPendingPlayback {
     if (self.playbackTransitionInProgress || !self.pendingPlaybackURL) return;
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) {
+    if (![self shouldAutoPlayReceived]) {
         self.pendingPlaybackURL = nil; self.pendingComparisonURL = nil; return;
     }
     if (self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
@@ -80,14 +86,14 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         self.pendingPlaybackURL = nil; self.pendingComparisonURL = nil;
         self.receivedPlayer = nil; self.comparisonPlayer = nil;
         if (!url || host.presentedViewController || !host.view.window ||
-            ![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"] ||
+            ![self shouldAutoPlayReceived] ||
             UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
             self.pendingPlaybackURL = url; self.pendingComparisonURL = subURL;
             self.playbackTransitionInProgress = NO;
             return;
         }
         UIViewController *next;
-        if (subURL) {
+        if (subURL && [NSUserDefaults.standardUserDefaults boolForKey:@"WJCompareAfterTransfer"]) {
             WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:url subURL:subURL];
             self.comparisonPlayer = comparison; next = comparison;
         } else {
@@ -158,7 +164,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         }];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(background) name:UIApplicationDidEnterBackgroundNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(foreground) name:UIApplicationDidBecomeActiveNotification object:nil];
-        [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"WJDuration":@20}];
+        [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"WJDuration":@20, @"WJCompareAfterTransfer":@YES}];
     }
     return self;
 }
@@ -166,7 +172,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     // 受信待機中に本体録画が直前に完了している場合は、メタデータを介さず
     // その2本を直接比較画面へ渡す。旧版サイドカーの役割誤りで単独再生に
     // フォールバックする経路をここで遮断する。
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] && [[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"] && [self shouldAutoPlayReceived]) {
         NSString *localPath = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestLocalCameraRecordingPath"];
         if (localPath.length && ![localPath isEqualToString:url.path] && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
             [self presentComparisonMainURL:[NSURL fileURLWithPath:localPath] subURL:url];
@@ -228,7 +234,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         }
         NSURL *mainURL = session[@"MAIN_CAMERA"], *subURL = session[@"SUB_CAMERA"];
         if (mainURL && subURL) {
-            if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
+            if (![self shouldAutoPlayReceived]) return;
             [self.receivedSessions removeObjectForKey:sessionID];
             [self presentComparisonMainURL:mainURL subURL:subURL];
             return;
@@ -261,6 +267,8 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     UIApplication.sharedApplication.idleTimerDisabled = NO;
 }
 - (void)foreground { [self applySettings]; [self displayReceived]; [self drainPendingPlayback]; }
+- (NSArray<NSDictionary *> *)transferQueueEntries { return self.transfer.transferQueueEntries; }
+- (NSString *)removeTransferEntries:(NSArray<NSString *> *)keys { return [self.transfer removeTransferEntries:keys]; }
 - (BOOL)protectsVideo:(NSURL *)url { if (!url) return NO; if (@available(iOS 13.0, *)) return [self.transfer protects:url]; return NO; }
 - (BOOL)recordingBusy { return self.recording.busy; }
 - (BOOL)communicationBusy { return self.transfer.communicationBusy; }
@@ -273,7 +281,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 - (void)retryTransfer { if (@available(iOS 13.0, *)) [self.transfer retry]; }
 - (void)retransferVideoURL:(NSURL *)url { if (@available(iOS 13.0, *)) [self.transfer requeue:url]; }
 - (void)displayReceived {
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) {
+    if (![self shouldAutoPlayReceived]) {
         self.waitingReceivedURL = nil;
         return;
     }
@@ -395,8 +403,8 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         }
     }
     NSURL *subURL = session[@"SUB_CAMERA"];
-    if (!subURL) return;
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"WJAutoPlayAfterTransfer"]) return;
+    if (!subURL || ![NSUserDefaults.standardUserDefaults boolForKey:@"WJCompareAfterTransfer"]) return;
+    if (![self shouldAutoPlayReceived]) return;
     [self.receivedSessions removeObjectForKey:sessionID];
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *host = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];

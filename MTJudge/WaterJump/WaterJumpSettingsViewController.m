@@ -596,6 +596,160 @@ static NSString *WJRoleTitle(NSString *role) {
     NSDictionary *titles = @{@"MAIN":@"メイン端末（受信端末を兼ねる）", @"CAMERA_1":@"カメラ1", @"CAMERA_2":@"カメラ2", @"CAMERA_3":@"カメラ3", @"RECEIVER":@"受信端末（メイン以外）"};
     return MTJText(titles[role ?: @""] ?: @"未設定");
 }
+@interface WJDurationList : UITableViewController
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *durations;
+@end
+@implementation WJDurationList
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.title = MTJText(@"録画時間");
+    self.durations = [[NSUserDefaults.standardUserDefaults arrayForKey:@"WJDurationOptions"] ?: @[@0,@10,@20,@30] mutableCopy];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(addDuration)];
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
+}
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.durations.count; }
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    NSInteger seconds = self.durations[path.row].integerValue;
+    cell.textLabel.text = seconds ? [NSString stringWithFormat:MTJText(@"%ld秒"), (long)seconds] : MTJText(@"手動停止");
+    cell.accessoryType = [NSUserDefaults.standardUserDefaults integerForKey:@"WJDuration"] == seconds ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
+    [tableView deselectRowAtIndexPath:path animated:YES];
+    if ([WaterJumpCoordinator shared].recordingBusy) return;
+    [NSUserDefaults.standardUserDefaults setObject:self.durations[path.row] forKey:@"WJDuration"];
+    [[WaterJumpCoordinator shared] applySettings]; [tableView reloadData];
+}
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)path { return self.durations.count > 1 && ![WaterJumpCoordinator shared].recordingBusy; }
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)style forRowAtIndexPath:(NSIndexPath *)path {
+    if (style != UITableViewCellEditingStyleDelete || [WaterJumpCoordinator shared].recordingBusy || self.durations.count <= 1) return;
+    NSNumber *removed = self.durations[path.row]; [self.durations removeObjectAtIndex:path.row];
+    if (removed.integerValue == [NSUserDefaults.standardUserDefaults integerForKey:@"WJDuration"]) {
+        [NSUserDefaults.standardUserDefaults setObject:self.durations.firstObject forKey:@"WJDuration"]; [[WaterJumpCoordinator shared] applySettings];
+    }
+    [NSUserDefaults.standardUserDefaults setObject:self.durations forKey:@"WJDurationOptions"]; [tableView reloadData];
+}
+- (void)addDuration {
+    if ([WaterJumpCoordinator shared].recordingBusy) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"録画時間を追加") message:MTJText(@"秒数を入力（0は手動停止）。項目を左にスワイプすると削除できます。") preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.keyboardType = UIKeyboardTypeNumberPad; field.placeholder = @"10"; }];
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"追加") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *text = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (!text.length || [text rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound || [WaterJumpCoordinator shared].recordingBusy) return;
+        NSScanner *scanner = [NSScanner scannerWithString:text]; long long seconds;
+        if (![scanner scanLongLong:&seconds] || !scanner.isAtEnd || seconds < 0 || seconds > NSIntegerMax) return;
+        NSNumber *value = @(seconds); if (![self.durations containsObject:value]) [self.durations addObject:value];
+        [self.durations sortUsingSelector:@selector(compare:)];
+        [NSUserDefaults.standardUserDefaults setObject:self.durations forKey:@"WJDurationOptions"]; [self.tableView reloadData];
+    }]]; [self presentViewController:alert animated:YES completion:nil];
+}
+@end
+
+@interface WJTransferQueueList : UITableViewController
+@property(nonatomic, strong) NSArray<NSArray<NSDictionary *> *> *sections;
+@property(nonatomic, strong) UIBarButtonItem *removeButton;
+@end
+@implementation WJTransferQueueList
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.title = MTJText(@"転送待ち動画の管理");
+    self.tableView.rowHeight = UITableViewAutomaticDimension; self.tableView.estimatedRowHeight = 100;
+    self.tableView.allowsMultipleSelectionDuringEditing = YES;
+    self.navigationItem.rightBarButtonItems = @[self.editButtonItem, [[UIBarButtonItem alloc] initWithTitle:MTJText(@"区分選択") style:UIBarButtonItemStylePlain target:self action:@selector(selectCategory)]];
+    self.removeButton = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"選択した転送対象を削除") style:UIBarButtonItemStylePlain target:self action:@selector(removeSelected)];
+    self.removeButton.tintColor = UIColor.systemRedColor;
+    self.toolbarItems = @[[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil], self.removeButton];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refresh) name:WJStatusChanged object:nil];
+    [self refresh];
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.navigationController setToolbarHidden:NO animated:animated]; [self refresh]; }
+- (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; [self.navigationController setToolbarHidden:YES animated:animated]; }
+- (NSArray<NSString *> *)categoryTitles { return @[MTJText(@"旧転送先への待ち情報"), MTJText(@"以前のグループ・接続設定の待ち情報"), MTJText(@"現在の転送待ち"), MTJText(@"元動画なし・自動再送対象外")]; }
+- (NSDictionary *)entryAt:(NSIndexPath *)path { return self.sections[path.section][path.row]; }
+- (void)refresh {
+    NSMutableSet *selected = [NSMutableSet set];
+    for (NSIndexPath *path in self.tableView.indexPathsForSelectedRows) [selected addObject:[self entryAt:path][@"key"]];
+    NSMutableArray *groups = [NSMutableArray array]; for (NSInteger i = 0; i < 4; i++) [groups addObject:[NSMutableArray array]];
+    for (NSDictionary *entry in [WaterJumpCoordinator shared].transferQueueEntries) [groups[[entry[@"category"] integerValue]] addObject:entry];
+    self.sections = groups; [self.tableView reloadData];
+    for (NSInteger section = 0; section < 4; section++) for (NSInteger row = 0; row < self.sections[section].count; row++) {
+        NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:section];
+        if ([selected containsObject:[self entryAt:path][@"key"]]) [self.tableView selectRowAtIndexPath:path animated:NO scrollPosition:UITableViewScrollPositionNone];
+    }
+    [self updateSelection];
+}
+- (void)updateSelection { NSInteger count = self.tableView.indexPathsForSelectedRows.count; self.removeButton.enabled = count > 0; self.removeButton.title = [NSString stringWithFormat:MTJText(@"選択した転送対象を削除（%ld件）"), (long)count]; }
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated { [super setEditing:editing animated:animated]; [self updateSelection]; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.sections[section].count; }
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section { return [NSString stringWithFormat:@"%@（%ld件）", [self categoryTitles][section], (long)self.sections[section].count]; }
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if (section == 0) return MTJText(@"現在の転送先に登録されていない端末への待ち情報です。左へスワイプして個別削除、または「区分選択」でまとめて選択できます。動画本体は削除しません。");
+    if (section == 3) return MTJText(@"元動画がない項目は自動再送しません。不要な待ち情報は削除できます。元動画がある項目は、通常表示でタップすると再生できます。");
+    return nil;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
+    NSDictionary *entry = [self entryAt:path];
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    cell.textLabel.text = entry[@"filename"]; cell.textLabel.numberOfLines = 0; cell.detailTextLabel.numberOfLines = 0;
+    NSDateFormatter *formatter = [NSDateFormatter new]; formatter.dateStyle = NSDateFormatterMediumStyle; formatter.timeStyle = NSDateFormatterShortStyle;
+    NSString *date = [entry[@"created"] doubleValue] > 0 ? [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:[entry[@"created"] doubleValue]]] : MTJText(@"撮影日時不明");
+    NSString *state = [entry[@"active"] boolValue] ? MTJText(@"転送中") : ([entry[@"missing"] boolValue] ? MTJText(@"元動画なし") : MTJText(@"動画保存済み"));
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@・%@\n転送先：%@\n%@", date, state, MTJText(entry[@"peerName"]), entry[@"peerID"]];
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault; return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
+    if (self.editing) { [self updateSelection]; return; }
+    [tableView deselectRowAtIndexPath:path animated:YES]; NSDictionary *entry = [self entryAt:path];
+    NSString *file = entry[@"path"];
+    if (!file.length || ![NSFileManager.defaultManager fileExistsAtPath:file]) { [self showError:MTJText(@"元動画がないため再生できません。不要な待ち情報は左へスワイプして転送対象から削除できます。")]; return; }
+    WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:[NSURL fileURLWithPath:file]];
+    [self presentViewController:player animated:YES completion:^{ [player.player play]; }];
+}
+- (void)tableView:(UITableView *)tableView didDeselectRowAtIndexPath:(NSIndexPath *)path { [self updateSelection]; }
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)path { return ![[self entryAt:path][@"active"] boolValue]; }
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)style forRowAtIndexPath:(NSIndexPath *)path {
+    if (style == UITableViewCellEditingStyleDelete) [self removeKeys:@[[self entryAt:path][@"key"]]];
+}
+- (void)showError:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"転送待ち動画の管理") message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)removeKeys:(NSArray<NSString *> *)keys {
+    NSString *error = [[WaterJumpCoordinator shared] removeTransferEntries:keys];
+    if (error.length) [self showError:MTJText(error)];
+    [self refresh];
+}
+- (void)removeSelected {
+    NSMutableArray *keys = [NSMutableArray array];
+    for (NSIndexPath *path in self.tableView.indexPathsForSelectedRows) [keys addObject:[self entryAt:path][@"key"]];
+    if (!keys.count) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"選択した転送対象を削除") message:[NSString stringWithFormat:MTJText(@"%ld件の転送待ち情報を削除します。動画本体・タグは削除しません。"), (long)keys.count] preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"削除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { [self removeKeys:keys]; }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)selectCategory {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"まとめて選択") message:MTJText(@"選択後、下部の削除ボタンで転送対象から外せます。") preferredStyle:UIAlertControllerStyleAlert];
+    for (NSInteger section = 0; section < 4; section++) {
+        if (!self.sections[section].count) continue;
+        NSString *title = [self tableView:self.tableView titleForHeaderInSection:section];
+        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [self setEditing:YES animated:YES];
+            for (NSIndexPath *path in self.tableView.indexPathsForSelectedRows) [self.tableView deselectRowAtIndexPath:path animated:NO];
+            for (NSInteger row = 0; row < self.sections[section].count; row++) {
+                NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:section];
+                if (![[self entryAt:path][@"active"] boolValue]) [self.tableView selectRowAtIndexPath:path animated:NO scrollPosition:UITableViewScrollPositionNone];
+            }
+            [self updateSelection];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil];
+}
+@end
+
 @interface WJSetupMenu : UITableViewController
 @property(nonatomic) BOOL easy;
 @end
@@ -617,7 +771,7 @@ static NSString *WJRoleTitle(NSString *role) {
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return self.easy ? 3 : 1; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (!self.easy) return 2;
+    if (!self.easy) return 9;
     CameraGroupManager *g = [WaterJumpCoordinator shared].group;
     return section == 0 ? 5 : (section == 1 ? g.groups.count : g.members.count);
 }
@@ -634,8 +788,43 @@ static NSString *WJRoleTitle(NSString *role) {
     c.textLabel.numberOfLines = 0; c.detailTextLabel.numberOfLines = 0;
     CameraGroupManager *g = [WaterJumpCoordinator shared].group;
     if (!self.easy) {
-        c.textLabel.text = MTJText(path.row == 0 ? @"簡単設定" : @"詳細設定");
-        c.detailTextLabel.text = MTJText(path.row == 0 ? @"グループと役割だけで接続を設定します" : (g.automatic ? @"自動設定の内容を確認・従来方式へ切替" : @"URL・QRコードによる従来の接続設定"));
+        if (path.row < 3) {
+            c.textLabel.text = MTJText(@[@"この端末のカメラ名", @"録画時間", @"転送時2画面同時再生"][path.row]);
+            if (path.row == 0) c.detailTextLabel.text = [NSUserDefaults.standardUserDefaults stringForKey:@"WJCameraName"] ?: UIDevice.currentDevice.name;
+            if (path.row == 1) { NSInteger seconds = [NSUserDefaults.standardUserDefaults integerForKey:@"WJDuration"]; c.detailTextLabel.text = seconds ? [NSString stringWithFormat:MTJText(@"%ld秒"), (long)seconds] : MTJText(@"手動停止"); }
+            if (path.row == 2) { UISwitch *toggle = [UISwitch new]; toggle.on = [NSUserDefaults.standardUserDefaults boolForKey:@"WJCompareAfterTransfer"]; [toggle addTarget:self action:@selector(compareChanged:) forControlEvents:UIControlEventValueChanged]; c.accessoryView = toggle; }
+            else c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
+        if (path.row < 6) {
+            NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+            WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
+            c.textLabel.text = MTJText(@[@"受信後自動再生", @"転送先でループ再生する", @"ループ再生設定"][path.row - 3]);
+            if (path.row == 5) {
+                NSInteger count = [defaults integerForKey:@"WJLoopCount"]; if (!count) count = 3;
+                NSInteger seconds = [defaults integerForKey:@"WJLoopDuration"];
+                c.detailTextLabel.text = count < 0 ? (seconds > 0 ? [NSString stringWithFormat:MTJText(@"無限・%ld分"), (long)(seconds / 60)] : MTJText(@"無限・時間制限なし")) : [NSString stringWithFormat:MTJText(@"%ld回"), (long)count];
+                c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            } else {
+                UISwitch *toggle = [UISwitch new]; toggle.tag = path.row;
+                NSString *key = path.row == 3 ? @"WJAutoPlayAfterTransfer" : @"WJLoopPlayback";
+                toggle.accessibilityIdentifier = key;
+                BOOL available = manager.receivedPlaybackAvailable && !manager.recordingBusy;
+                toggle.enabled = available && (path.row == 3 || [defaults boolForKey:@"WJAutoPlayAfterTransfer"]);
+                toggle.on = manager.receivedPlaybackAvailable && [defaults boolForKey:key];
+                if (path.row == 4) toggle.on = toggle.on && [defaults boolForKey:@"WJAutoPlayAfterTransfer"];
+                [toggle addTarget:self action:@selector(playbackChanged:) forControlEvents:UIControlEventValueChanged]; c.accessoryView = toggle;
+                if (path.row == 3 && !manager.receivedPlaybackAvailable) c.detailTextLabel.text = MTJText(@"メインまたは受信端末の役割で、受信待機中に有効です。");
+            }
+            return c;
+        }
+        if (path.row == 8) {
+            c.textLabel.text = MTJText(@"転送待ち動画の管理");
+            c.detailTextLabel.text = [NSString stringWithFormat:MTJText(@"%ld件・旧転送先の待ち情報を確認・削除"), (long)[WaterJumpCoordinator shared].transferQueueEntries.count];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
+        }
+        c.textLabel.text = MTJText(path.row == 6 ? @"簡単設定" : @"詳細設定");
+        c.detailTextLabel.text = MTJText(path.row == 6 ? @"グループと役割だけで接続を設定します" : (g.automatic ? @"自動設定の内容を確認・従来方式へ切替" : @"URL・QRコードによる従来の接続設定"));
         c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (path.section == 0) {
         c.textLabel.text = MTJText(@[@"カメラグループを作成",@"この端末の役割",@"この端末のカメラ名",@"接続状態",@"設定をリセット"][path.row]);
@@ -655,6 +844,16 @@ static NSString *WJRoleTitle(NSString *role) {
     }
     return c;
 }
+- (void)playbackChanged:(UISwitch *)sender {
+    WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
+    if (!manager.receivedPlaybackAvailable || manager.recordingBusy) { [self refresh]; return; }
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setBool:sender.on forKey:sender.tag == 3 ? @"WJAutoPlayAfterTransfer" : @"WJLoopPlayback"];
+    if (sender.tag == 3 && !sender.on) [defaults setBool:NO forKey:@"WJLoopPlayback"];
+    [manager applySettings]; [self refresh];
+}
+- (void)compareChanged:(UISwitch *)sender { [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:@"WJCompareAfterTransfer"]; }
+- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.tableView reloadData]; }
 - (void)selectRoleForGroup:(NSString *)groupID {
     CameraGroupManager *g = [WaterJumpCoordinator shared].group;
     if (!groupID.length || ([g.role isEqual:@"MAIN"] && [groupID isEqual:g.groupID])) { [self showMessage:@"メインはグループ作成時に設定されます。他の役割は検索したグループを選択して設定してください。"]; return; }
@@ -668,7 +867,13 @@ static NSString *WJRoleTitle(NSString *role) {
     [tableView deselectRowAtIndexPath:path animated:YES];
     CameraGroupManager *g = [WaterJumpCoordinator shared].group;
     if (!self.easy) {
-        if (path.row == 0) { WJSetupMenu *vc = [WJSetupMenu new]; vc.easy = YES; [self.navigationController pushViewController:vc animated:YES]; }
+        if (path.row == 0) { [WaterJumpSettingsViewController presentCameraNameFrom:self]; return; }
+        if (path.row == 1) { [WaterJumpSettingsViewController presentDurationFrom:self]; return; }
+        if (path.row == 2) return;
+        if (path.row == 8) { [self.navigationController pushViewController:[WJTransferQueueList new] animated:YES]; return; }
+        if (path.row == 3 || path.row == 4) return;
+        if (path.row == 5) { [WaterJumpSettingsViewController presentLoopSettingsFrom:self]; return; }
+        if (path.row == 6) { WJSetupMenu *vc = [WJSetupMenu new]; vc.easy = YES; [self.navigationController pushViewController:vc animated:YES]; }
         else [self.navigationController pushViewController:[WaterJumpSettingsViewController new] animated:YES];
         return;
     }
@@ -714,12 +919,25 @@ static NSString *WJRoleTitle(NSString *role) {
 }
 + (void)presentDurationFrom:(UIViewController *)host {
     if ([WaterJumpCoordinator shared].recordingBusy) return;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:MTJText(@"録画時間") message:nil preferredStyle:UIAlertControllerStyleAlert];
-    for (NSNumber *seconds in @[@0,@10,@15,@20,@30,@45,@60]) {
-        NSString *title = seconds.integerValue ? [NSString stringWithFormat:MTJText(@"%@秒"),seconds] : MTJText(@"ー（手動停止）");
-        [a addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [NSUserDefaults.standardUserDefaults setObject:seconds forKey:@"WJDuration"]; [[WaterJumpCoordinator shared] applySettings]; }]];
-    }
-    [a addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]]; [host presentViewController:a animated:YES completion:nil];
+    [host presentViewController:[[UINavigationController alloc] initWithRootViewController:[WJDurationList new]] animated:YES completion:nil];
+}
++ (void)presentLoopSettingsFrom:(UIViewController *)host {
+    if ([WaterJumpCoordinator shared].recordingBusy) return;
+        UIAlertController *countAlert = [UIAlertController alertControllerWithTitle:MTJText(@"ループ再生回数") message:nil preferredStyle:UIAlertControllerStyleAlert];
+        for (NSNumber *count in @[@3, @5, @10]) {
+            [countAlert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:MTJText(@"%@回"), count] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [[NSUserDefaults standardUserDefaults] setInteger:count.integerValue forKey:@"WJLoopCount"]; [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"WJLoopDuration"]; [[WaterJumpCoordinator shared] publish]; }]];
+        }
+        [countAlert addAction:[UIAlertAction actionWithTitle:MTJText(@"無限") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            UIAlertController *timeAlert = [UIAlertController alertControllerWithTitle:MTJText(@"無限ループの時間制限") message:nil preferredStyle:UIAlertControllerStyleAlert];
+            for (NSNumber *seconds in @[@0, @60, @180, @300, @600]) {
+                NSString *title = seconds.integerValue == 0 ? MTJText(@"時間制限なし") : [NSString stringWithFormat:MTJText(@"%ld分"), (long)(seconds.integerValue / 60)];
+                [timeAlert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { [[NSUserDefaults standardUserDefaults] setInteger:-1 forKey:@"WJLoopCount"]; [[NSUserDefaults standardUserDefaults] setInteger:seconds.integerValue forKey:@"WJLoopDuration"]; [[WaterJumpCoordinator shared] publish]; }]];
+            }
+            [timeAlert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+            [host presentViewController:timeAlert animated:YES completion:nil];
+        }]];
+        [countAlert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+        [host presentViewController:countAlert animated:YES completion:nil];
 }
 + (void)presentDefaultTagsFrom:(UIViewController *)host {
     TagSelectionViewController *selection = [[TagSelectionViewController alloc] initWithVideoFileURL:nil]; selection.selections = @[];
@@ -771,7 +989,7 @@ static NSString *WJRoleTitle(NSString *role) {
 - (NSArray<NSIndexPath *> *)recordingSettingRows {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSMutableArray *rows = [NSMutableArray array];
-    for (NSNumber *number in @[@0, @1, @2, @4, @6, @5, @7, @8, @10, @9, @12, @14]) {
+    for (NSNumber *number in @[@0, @1, @2, @4, @6, @5, @9, @12, @14]) {
         NSInteger row = number.integerValue;
         [rows addObject:[NSIndexPath indexPathForRow:row inSection:0]];
         if (row == 1 && [defaults boolForKey:@"WJWeb"]) [rows addObject:[NSIndexPath indexPathForRow:1 inSection:1]];
@@ -1018,31 +1236,10 @@ static NSString *WJRoleTitle(NSString *role) {
         return;
     }
     if (indexPath.section == 0 && indexPath.row == 3 && !manager.recordingBusy) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"録画時間") message:nil preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"ー（手動停止）") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            [[NSUserDefaults standardUserDefaults] setDouble:0 forKey:@"WJDuration"]; [manager applySettings]; [self refresh];
-        }]];
-        for (NSNumber *seconds in @[@10,@15,@20,@30,@45,@60]) [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:MTJText(@"%@秒"),seconds] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            [[NSUserDefaults standardUserDefaults] setObject:seconds forKey:@"WJDuration"]; [manager applySettings];
-        }]];
-        [alert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil];
+        [WaterJumpSettingsViewController presentDurationFrom:self];
     }
     if (indexPath.section == 0 && indexPath.row == 10 && !manager.recordingBusy) {
-        UIAlertController *countAlert = [UIAlertController alertControllerWithTitle:MTJText(@"ループ再生回数") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-        for (NSNumber *count in @[@3, @5, @10]) {
-            [countAlert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:MTJText(@"%@回"), count] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [[NSUserDefaults standardUserDefaults] setInteger:count.integerValue forKey:@"WJLoopCount"]; [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"WJLoopDuration"]; [self refresh]; }]];
-        }
-        [countAlert addAction:[UIAlertAction actionWithTitle:MTJText(@"無限") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            UIAlertController *timeAlert = [UIAlertController alertControllerWithTitle:MTJText(@"無限ループの時間制限") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-            for (NSNumber *seconds in @[@0, @60, @180, @300, @600]) {
-                NSString *title = seconds.integerValue == 0 ? MTJText(@"時間制限なし") : [NSString stringWithFormat:MTJText(@"%ld分"), (long)(seconds.integerValue / 60)];
-                [timeAlert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { [[NSUserDefaults standardUserDefaults] setInteger:-1 forKey:@"WJLoopCount"]; [[NSUserDefaults standardUserDefaults] setInteger:seconds.integerValue forKey:@"WJLoopDuration"]; [self refresh]; }]];
-            }
-            [timeAlert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
-            [self presentViewController:timeAlert animated:YES completion:nil];
-        }]];
-        [countAlert addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
-        [self presentViewController:countAlert animated:YES completion:nil];
+        [WaterJumpSettingsViewController presentLoopSettingsFrom:self];
     }
     if (indexPath.section == 0 && indexPath.row == 11) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"この端末のカメラ名") message:MTJText(@"動画情報と端末間転送のメタデータに使用します。") preferredStyle:UIAlertControllerStyleAlert];
