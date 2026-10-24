@@ -1,9 +1,13 @@
 #import <Foundation/Foundation.h>
 @class RecordingController, CameraGroupManager;
 extern NSString * const WJStatusChanged;
+@protocol MTJReceivedPlaybackHost <NSObject>
+- (BOOL)displayReceivedMainURL:(NSURL *)mainURL subURL:(NSURL *)subURL;
+@end
 @interface WaterJumpCoordinator : NSObject
 + (instancetype)shared;
 @property (nonatomic, weak) RecordingController *recording;
+@property (nonatomic, weak) id<MTJReceivedPlaybackHost> playbackHost;
 @property (nonatomic, readonly) CameraGroupManager *group;
 @property (nonatomic, readonly) BOOL communicationBusy;
 @property (nonatomic, readonly) BOOL transferNeedsRetry;
@@ -28,6 +32,9 @@ extern NSString * const WJStatusChanged;
 - (void)publish;
 - (void)saveAutomatic:(NSURL *)url completion:(void (^)(NSURL *, NSDictionary *, NSError *))completion;
 - (void)enqueueAutomaticVideoURL:(NSURL *)url metadata:(NSDictionary *)metadata tags:(NSArray<NSDictionary *> *)tags;
+@property (nonatomic, readonly) NSArray<NSDictionary *> *remoteCameras;
+@property (nonatomic, readonly) BOOL remoteOnlyRecording;
+- (NSString *)toggleRemoteOnlyRecording;
 - (void)sendSubCameraCommand:(NSString *)command;
 - (void)considerLocalMainRecordingURL:(NSURL *)url;
 @end

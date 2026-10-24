@@ -18,6 +18,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 #import "FileSaver.h"
 #import "WaterJump/RecordingController.h"
 #import "WaterJump/WaterJumpCoordinator.h"
+#import "MTJudge-Swift.h"
 #import "WaterJump/WaterJumpSettingsViewController.h"
 #import <AudioToolbox/AudioToolbox.h>
 #import <Vision/Vision.h>
@@ -60,7 +61,13 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 @end
 
-@interface VideoRecordingViewController () <UIDocumentPickerDelegate>
+@interface VideoRecordingViewController () <UIDocumentPickerDelegate, UIGestureRecognizerDelegate>
+@property(nonatomic, strong) NSTimer *unattendedTimer;
+@property(nonatomic, strong) UIControl *unattendedShield;
+@property(nonatomic, strong) UITapGestureRecognizer *cameraActivityMonitor;
+@property(nonatomic, strong) UIScreen *dimmedScreen;
+@property(nonatomic) CGFloat originalScreenBrightness;
+@property(nonatomic) BOOL unattendedEligible;
 @property (nonatomic, strong) UIButton *transferRetryButton;
 @property (nonatomic, strong) UILabel *waterJumpStatus;
 @property (nonatomic, strong) RecordingController *recordingController;
@@ -136,6 +143,11 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.cameraActivityMonitor = [[UITapGestureRecognizer alloc] initWithTarget:nil action:nil];
+    self.cameraActivityMonitor.delegate = self; self.cameraActivityMonitor.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:self.cameraActivityMonitor];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(suspendUnattendedDisplay) name:UIApplicationWillResignActiveNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateUnattendedDisplay) name:UIApplicationDidBecomeActiveNotification object:nil];
     
     self.videoRecorder = [[VideoRecorder alloc] init];
     self.videoRecorder.delegate = self;
@@ -176,6 +188,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.playbackSpeed = 1.0;
     self.requestedZoom = 1.0;
     [self setupCameraControls];
+    [WaterJumpSettingsViewController installRemotePreviewOn:self recordingButton:self.recordButton];
     UIButton *remote = [self cameraButtonWithAction:@selector(openWaterJump)];
     [self styleButton:remote title:MTJText(@"リモート操作設定") symbol:@"gearshape.fill" color:UIColor.darkGrayColor];
     remote.accessibilityIdentifier = @"WJSettingsButton";
@@ -237,6 +250,45 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.waterJumpStatus.hidden = ![WaterJumpCoordinator shared].modeEnabled && ![[NSUserDefaults standardUserDefaults] boolForKey:@"WJReceive"];
     [self updateCameraControls];
     self.waterJumpStatus.text = [NSString stringWithFormat:@"%@\n%@", MTJText(status[@"state"]), MTJText(status[@"message"])];
+    [self updateUnattendedDisplay];
+}
+- (void)updateUnattendedDisplay {
+    WaterJumpCoordinator *manager = [WaterJumpCoordinator shared];
+    BOOL cameraRole = manager.group.automatic ? [manager.group.role hasPrefix:@"CAMERA_"] : [[NSUserDefaults.standardUserDefaults stringForKey:@"WJCameraRole"] isEqualToString:@"SUB_CAMERA"];
+    self.unattendedEligible = manager.modeEnabled && cameraRole && self.view.window && self.tabBarController.selectedViewController == self && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+    if (!self.unattendedEligible) { [self suspendUnattendedDisplay]; return; }
+    if (!self.unattendedShield && !self.unattendedTimer) [self resetUnattendedTimer];
+}
+- (void)resetUnattendedTimer {
+    [self.unattendedTimer invalidate]; self.unattendedTimer = nil;
+    if (!self.unattendedEligible || self.unattendedShield) return;
+    __weak typeof(self) weakSelf = self;
+    self.unattendedTimer = [NSTimer timerWithTimeInterval:30 repeats:NO block:^(NSTimer *timer) {
+        weakSelf.unattendedTimer = nil; [weakSelf enterUnattendedDisplay];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:self.unattendedTimer forMode:NSRunLoopCommonModes];
+}
+- (void)enterUnattendedDisplay {
+    if (!self.unattendedEligible || !self.view.window || self.presentedViewController || self.player || self.pendingRecordingURL || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    UIControl *shield = [UIControl new]; shield.backgroundColor = UIColor.blackColor;
+    shield.frame = self.view.window.bounds; shield.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    shield.accessibilityLabel = MTJText(@"省電力待機中。タップしてカメラ映像を表示"); shield.isAccessibilityElement = YES; shield.accessibilityTraits = UIAccessibilityTraitButton;
+    [shield addTarget:self action:@selector(wakeUnattendedDisplay) forControlEvents:UIControlEventTouchUpInside];
+    self.unattendedShield = shield;
+    self.dimmedScreen = self.view.window.screen; self.originalScreenBrightness = self.dimmedScreen.brightness;
+    [self.view.window addSubview:shield]; self.dimmedScreen.brightness = MIN(self.originalScreenBrightness,.02);
+    [self.videoRecorder setLocalPreviewSuppressed:YES];
+}
+- (void)suspendUnattendedDisplay {
+    [self.unattendedTimer invalidate]; self.unattendedTimer = nil;
+    [self.unattendedShield removeFromSuperview]; self.unattendedShield = nil;
+    if (self.dimmedScreen) { self.dimmedScreen.brightness = self.originalScreenBrightness; self.dimmedScreen = nil; }
+    [self.videoRecorder setLocalPreviewSuppressed:NO];
+}
+- (void)wakeUnattendedDisplay { [self suspendUnattendedDisplay]; [self updateUnattendedDisplay]; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture shouldReceiveTouch:(UITouch *)touch {
+    if (gesture == self.cameraActivityMonitor) { [self resetUnattendedTimer]; return NO; }
+    return YES;
 }
 #pragma mark - VideoRecorderDelegate
 - (void)videoRecorderDidStart:(id)recorder { [self.recordingController didStart]; }
@@ -576,6 +628,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 // フレームごとに呼び出されるデリゲートメソッド
 - (void)videoRecorder:(id)recorder didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    if (!self.isSkeletonDrawingEnabled) return;
     
     // カメラから送られてくるビデオフレーム（sampleBuffer）から、そのフレームのピクセルデータに
     // アクセスするためのオブジェクト（pixelBuffer）を取り出す
@@ -769,6 +822,7 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         [defaults setBool:NO forKey:@"WJRemoteStartInProgress"];
         if (![[defaults stringForKey:@"WJConnectionMode"] isEqual:@"automatic"]) [defaults setObject:@"MAIN_CAMERA" forKey:@"WJCameraRole"];
+        self.recordingController.duration = [defaults doubleForKey:@"WJDuration"];
         NSError *startError = nil;
         if (![self.recordingController startAutomatic:[WaterJumpCoordinator shared].modeEnabled error:&startError]) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"録画を開始できません") message:startError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
@@ -1466,18 +1520,27 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    [self.videoRecorder setCameraActive:YES];
     if (!self.recordingController.busy && !self.pendingRecordingURL) {
         NSString *path = [[NSUserDefaults standardUserDefaults] stringForKey:@"LatestCameraRecordingPath"];
         if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) self.latestRecordingURL = [NSURL fileURLWithPath:path];
         [self updateCameraControls];
     }
 }
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self updateUnattendedDisplay]; }
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    self.unattendedEligible = NO; [self suspendUnattendedDisplay];
     [self stopPlayback];
 }
 
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    if (self.tabBarController.selectedViewController != self && !self.recordingController.busy) [self.videoRecorder setCameraActive:NO];
+}
 - (void)dealloc {
+    [_unattendedTimer invalidate]; [_unattendedShield removeFromSuperview];
+    if (_dimmedScreen) _dimmedScreen.brightness = _originalScreenBrightness;
     [_playbackControls removeFromSuperview];
     if (_playbackTimeObserver) [_player removeTimeObserver:_playbackTimeObserver];
     if (_player) [_player.currentItem removeObserver:self forKeyPath:@"status"];

@@ -25,7 +25,32 @@ static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
 #import <Vision/Vision.h>
 #import <ImageIO/ImageIO.h>
 
-@interface WJVideoLibrary : UITableViewController <UIImagePickerControllerDelegate, UINavigationControllerDelegate>
+// Keep portrait thumbnails from determining the height of an entire list row.
+@interface WJLibraryListCell : UITableViewCell
+@end
+@implementation WJLibraryListCell
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    self.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    self.imageView.clipsToBounds = YES;
+    self.imageView.frame = CGRectMake(12, 10, 56, 80);
+    CGFloat right = self.accessoryView ? CGRectGetMinX(self.accessoryView.frame) - 8 : self.contentView.bounds.size.width - 12;
+    CGFloat width = MAX(40, right - 80);
+    self.textLabel.font = [UIFont systemFontOfSize:14];
+    self.textLabel.numberOfLines = 2;
+    self.textLabel.frame = CGRectMake(80, 8, width, 36);
+    self.detailTextLabel.font = [UIFont systemFontOfSize:12];
+    self.detailTextLabel.frame = CGRectMake(80, 45, width, 50);
+}
+@end
+
+@interface WJVideoLibrary : UIViewController <UIImagePickerControllerDelegate, UINavigationControllerDelegate, UITableViewDataSource, UITableViewDelegate, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UIGestureRecognizerDelegate>
+@property(nonatomic, strong) UITableView *tableView;
+@property(nonatomic, strong) UICollectionView *gridView;
+@property(nonatomic, strong) UICollectionView *recentView;
+@property(nonatomic, strong) NSArray<NSURL *> *recentVideos;
+@property(nonatomic, strong) NSCache<NSString *, UIImage *> *thumbnailCache;
+@property(nonatomic, copy) void (^playbackSelectionHandler)(NSURL *url);
 @property (nonatomic, strong) NSArray<NSURL *> *videos;
 @property (nonatomic, strong) NSURL *selectedMainURL;
 @property (nonatomic, strong) NSURL *selectedSubURL;
@@ -35,6 +60,10 @@ static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) NSURL *comparisonMainURL;
 @property (nonatomic, copy) void (^comparisonSelectionHandler)(NSURL *url);
 @property (nonatomic, strong) UIPanGestureRecognizer *multiSelectPanGesture;
+@property (nonatomic, strong) UIPanGestureRecognizer *gridSelectPanGesture;
+@property (nonatomic, weak) UIScrollView *selectionScrollView;
+@property (nonatomic) BOOL dragDeselects;
+@property (nonatomic) CGPoint selectionStartPoint;
 @property (nonatomic, strong) NSMutableSet<NSIndexPath *> *dragSelectedIndexPaths;
 @property (nonatomic, strong) NSTimer *multiSelectAutoScrollTimer;
 @property (nonatomic, assign) CGPoint multiSelectLastPoint;
@@ -235,8 +264,33 @@ static UIImage *WJQRCodeImage(NSString *value) {
 @implementation WJVideoLibrary
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.view.backgroundColor = UIColor.systemBackgroundColor;
+    self.thumbnailCache = [NSCache new]; self.thumbnailCache.countLimit = 100;
+    self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.tableView.delegate = self; self.tableView.dataSource = self; self.tableView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.tableView];
+    UICollectionViewFlowLayout *layout = [UICollectionViewFlowLayout new]; layout.minimumInteritemSpacing = 10; layout.minimumLineSpacing = 12; layout.sectionInset = UIEdgeInsetsMake(12,12,12,12);
+    self.gridView = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:layout]; self.gridView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.gridView.backgroundColor = UIColor.systemBackgroundColor; self.gridView.dataSource = self; self.gridView.delegate = self;
+    [self.gridView registerClass:UICollectionViewCell.class forCellWithReuseIdentifier:@"video"]; [self.view addSubview:self.gridView];
+    UICollectionViewFlowLayout *recentLayout = [UICollectionViewFlowLayout new]; recentLayout.scrollDirection = UICollectionViewScrollDirectionHorizontal; recentLayout.minimumLineSpacing = 10; recentLayout.sectionInset = UIEdgeInsetsMake(4,12,4,12);
+    self.recentView = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:recentLayout]; self.recentView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.recentView.backgroundColor = UIColor.secondarySystemBackgroundColor; self.recentView.dataSource = self; self.recentView.delegate = self;
+    [self.recentView registerClass:UICollectionViewCell.class forCellWithReuseIdentifier:@"video"]; [self.view addSubview:self.recentView];
+    UILabel *recentLabel = [UILabel new]; recentLabel.text = MTJText(@"直近の再生履歴（最大10件）"); recentLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1]; recentLabel.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:recentLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.recentView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [self.recentView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor], [self.recentView.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor], [self.recentView.heightAnchor constraintEqualToConstant:138],
+        [recentLabel.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:12], [recentLabel.bottomAnchor constraintEqualToAnchor:self.recentView.topAnchor constant:-4],
+        [self.tableView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor], [self.tableView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [self.tableView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor], [self.tableView.bottomAnchor constraintEqualToAnchor:recentLabel.topAnchor constant:-8],
+        [self.gridView.topAnchor constraintEqualToAnchor:self.tableView.topAnchor], [self.gridView.leadingAnchor constraintEqualToAnchor:self.tableView.leadingAnchor], [self.gridView.trailingAnchor constraintEqualToAnchor:self.tableView.trailingAnchor], [self.gridView.bottomAnchor constraintEqualToAnchor:self.tableView.bottomAnchor]
+    ]];
     self.title = MTJText(@"練習動画");
-    self.gridMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"WJVideoGridMode"];
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"WJThumbnailLibraryV2Enabled"]) {
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"WJVideoGridMode"];
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"WJThumbnailLibraryV2Enabled"];
+    }
+    self.gridMode = [NSUserDefaults.standardUserDefaults objectForKey:@"WJVideoGridMode"] ? [NSUserDefaults.standardUserDefaults boolForKey:@"WJVideoGridMode"] : YES;
+    self.gridView.hidden = !self.gridMode; self.tableView.hidden = self.gridMode;
     self.navigationItem.leftBarButtonItem = self.comparisonSelectionMode ? nil : [[UIBarButtonItem alloc] initWithTitle:MTJText(@"選択") style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
     UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"写真") style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
     UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
@@ -245,13 +299,24 @@ static UIImage *WJQRCodeImage(NSString *value) {
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectComparisonVideo:)];
     longPress.minimumPressDuration = .55;
     longPress.cancelsTouchesInView = YES;
-    if (!self.comparisonSelectionMode) [self.tableView addGestureRecognizer:longPress];
+    if (!self.comparisonSelectionMode) {
+        [self.tableView addGestureRecognizer:longPress];
+        UILongPressGestureRecognizer *gridPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectComparisonGrid:)]; gridPress.minimumPressDuration = .55; [self.gridView addGestureRecognizer:gridPress];
+    }
     self.dragSelectedIndexPaths = [NSMutableSet set];
     self.multiSelectPanGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(multiSelectPan:)];
-    self.multiSelectPanGesture.cancelsTouchesInView = NO;
+    self.multiSelectPanGesture.cancelsTouchesInView = YES;
     self.multiSelectPanGesture.maximumNumberOfTouches = 1;
     self.multiSelectPanGesture.enabled = NO;
     [self.tableView addGestureRecognizer:self.multiSelectPanGesture];
+    self.multiSelectPanGesture.delegate = self;
+    [self.tableView.panGestureRecognizer requireGestureRecognizerToFail:self.multiSelectPanGesture];
+    self.gridSelectPanGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(multiSelectPan:)];
+    self.gridSelectPanGesture.maximumNumberOfTouches = 1;
+    self.gridSelectPanGesture.delegate = self;
+    self.gridSelectPanGesture.enabled = NO;
+    [self.gridView addGestureRecognizer:self.gridSelectPanGesture];
+    [self.gridView.panGestureRecognizer requireGestureRecognizerToFail:self.gridSelectPanGesture];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoDeleted" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoSaved" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoFavoritesChanged" object:nil];
@@ -259,7 +324,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
 }
 - (void)beginMultiSelect {
     self.editing = YES;
-    self.multiSelectPanGesture.enabled = YES;
+    self.multiSelectPanGesture.enabled = YES; self.gridSelectPanGesture.enabled = YES;
     [self.dragSelectedIndexPaths removeAllObjects];
     self.tableView.allowsMultipleSelectionDuringEditing = YES;
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"キャンセル") style:UIBarButtonItemStylePlain target:self action:@selector(endMultiSelect)];
@@ -276,7 +341,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
 }
 - (void)endMultiSelect {
     self.editing = NO;
-    self.multiSelectPanGesture.enabled = NO;
+    self.multiSelectPanGesture.enabled = NO; self.gridSelectPanGesture.enabled = NO;
     [self.multiSelectAutoScrollTimer invalidate];
     self.multiSelectAutoScrollTimer = nil;
     [self.dragSelectedIndexPaths removeAllObjects];
@@ -286,54 +351,68 @@ static UIImage *WJQRCodeImage(NSString *value) {
     grid.accessibilityLabel = MTJText(@"リスト表示とサムネイル表示を切り替え");
     self.navigationItem.rightBarButtonItems = self.comparisonSelectionMode ? @[grid] : @[photo, grid];
 }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture shouldReceiveTouch:(UITouch *)touch {
+    if (gesture == self.multiSelectPanGesture || gesture == self.gridSelectPanGesture) self.selectionStartPoint = [touch locationInView:gesture.view];
+    return YES;
+}
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gesture {
+    if (gesture != self.multiSelectPanGesture && gesture != self.gridSelectPanGesture) return YES;
+    if (!self.editing || self.comparisonSelectionMode) return NO;
+    CGPoint point = self.selectionStartPoint;
+    return gesture.view == self.gridView ? [self.gridView indexPathForItemAtPoint:point] != nil : [self.tableView indexPathForRowAtPoint:point] != nil;
+}
+- (void)selectDragPoint:(CGPoint)point {
+    NSIndexPath *path = self.selectionScrollView == self.gridView ? [self.gridView indexPathForItemAtPoint:point] : [self.tableView indexPathForRowAtPoint:point];
+    if (!path || path.row >= self.videos.count || [self.dragSelectedIndexPaths containsObject:path]) return;
+    [self.dragSelectedIndexPaths addObject:path];
+    if (self.dragDeselects) [self.tableView deselectRowAtIndexPath:path animated:NO];
+    else [self.tableView selectRowAtIndexPath:path animated:NO scrollPosition:UITableViewScrollPositionNone];
+    [self.tableView cellForRowAtIndexPath:path].accessoryType = self.dragDeselects ? UITableViewCellAccessoryNone : UITableViewCellAccessoryCheckmark;
+    if (self.selectionScrollView == self.gridView) [self.gridView reloadItemsAtIndexPaths:@[path]];
+}
 - (void)multiSelectAutoScrollTick:(NSTimer *)timer {
     if (!self.editing) return;
-    CGFloat edge = 72.0;
-    CGFloat y = self.multiSelectLastPoint.y;
-    CGFloat delta = 0;
-    if (y < edge) delta = -10.0 * (1.0 - MAX(0, y) / edge);
-    else if (y > self.tableView.bounds.size.height - edge) delta = 10.0 * (1.0 - MAX(0, self.tableView.bounds.size.height - y) / edge);
-    if (fabs(delta) < 0.5) return;
-    CGPoint offset = self.tableView.contentOffset;
-    CGFloat minY = -self.tableView.adjustedContentInset.top;
-    CGFloat maxY = MAX(minY, self.tableView.contentSize.height - self.tableView.bounds.size.height + self.tableView.adjustedContentInset.bottom);
-    offset.y = MIN(maxY, MAX(minY, offset.y + delta));
-    [self.tableView setContentOffset:offset animated:NO];
-    NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:self.multiSelectLastPoint];
-    if (indexPath && indexPath.section == 0 && indexPath.row < self.videos.count && ![self.dragSelectedIndexPaths containsObject:indexPath]) {
-        [self.dragSelectedIndexPaths addObject:indexPath];
-        [self.tableView selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
-        [self.tableView cellForRowAtIndexPath:indexPath].accessoryType = UITableViewCellAccessoryCheckmark;
-    }
-}
-- (void)updateMultiSelectAutoScroll {
-    CGFloat edge = 72.0;
-    BOOL nearEdge = self.multiSelectLastPoint.y < edge || self.multiSelectLastPoint.y > self.tableView.bounds.size.height - edge;
-    if (nearEdge && !self.multiSelectAutoScrollTimer) {
-        self.multiSelectAutoScrollTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:self selector:@selector(multiSelectAutoScrollTick:) userInfo:nil repeats:YES];
-    } else if (!nearEdge) {
-        [self.multiSelectAutoScrollTimer invalidate];
-        self.multiSelectAutoScrollTimer = nil;
-    }
+    UIScrollView *scroll = self.selectionScrollView;
+    // Compare viewport coordinates, then convert back to content coordinates after scrolling.
+    CGFloat edge = MIN(72, scroll.bounds.size.height / 3), y = self.multiSelectLastPoint.y;
+    CGFloat delta = y < edge ? -10 * (1 - MAX(0,y) / edge) : (y > scroll.bounds.size.height - edge ? 10 * (1 - MAX(0,scroll.bounds.size.height-y) / edge) : 0);
+    if (fabs(delta) < .5) return;
+    CGFloat minY = -scroll.adjustedContentInset.top;
+    CGFloat maxY = MAX(minY, scroll.contentSize.height - scroll.bounds.size.height + scroll.adjustedContentInset.bottom);
+    CGPoint offset = scroll.contentOffset; offset.y = MIN(maxY, MAX(minY, offset.y + delta));
+    [scroll setContentOffset:offset animated:NO];
+    [self selectDragPoint:CGPointMake(self.multiSelectLastPoint.x + scroll.bounds.origin.x, self.multiSelectLastPoint.y + scroll.bounds.origin.y)];
 }
 - (void)multiSelectPan:(UIPanGestureRecognizer *)gesture {
     if (!self.editing || self.comparisonSelectionMode) return;
-    UIGestureRecognizerState state = gesture.state;
-    self.multiSelectLastPoint = [gesture locationInView:self.tableView];
-    if (state == UIGestureRecognizerStateBegan) [self.dragSelectedIndexPaths removeAllObjects];
-    if (state == UIGestureRecognizerStateEnded || state == UIGestureRecognizerStateCancelled || state == UIGestureRecognizerStateFailed) {
-        [self.multiSelectAutoScrollTimer invalidate];
-        self.multiSelectAutoScrollTimer = nil;
-        return;
+    UIScrollView *scroll = (UIScrollView *)gesture.view;
+    CGPoint point = [gesture locationInView:scroll];
+    CGPoint viewport = CGPointMake(point.x - scroll.bounds.origin.x, point.y - scroll.bounds.origin.y);
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        self.selectionScrollView = scroll;
+        [self.dragSelectedIndexPaths removeAllObjects];
+        // Recognition may begin after a fast swipe has crossed several cells.
+        CGPoint start = self.selectionStartPoint;
+        NSIndexPath *path = scroll == self.gridView ? [self.gridView indexPathForItemAtPoint:start] : [self.tableView indexPathForRowAtPoint:start];
+        self.dragDeselects = path && [self.tableView.indexPathsForSelectedRows containsObject:path];
+        self.multiSelectLastPoint = CGPointMake(start.x - scroll.bounds.origin.x, start.y - scroll.bounds.origin.y);
+        [self selectDragPoint:start];
+        self.multiSelectAutoScrollTimer = [NSTimer timerWithTimeInterval:.05 target:self selector:@selector(multiSelectAutoScrollTick:) userInfo:nil repeats:YES];
+        [NSRunLoop.mainRunLoop addTimer:self.multiSelectAutoScrollTimer forMode:NSRunLoopCommonModes];
     }
-    if (state != UIGestureRecognizerStateBegan && state != UIGestureRecognizerStateChanged) return;
-    [self updateMultiSelectAutoScroll];
-    NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:self.multiSelectLastPoint];
-    if (!indexPath || indexPath.section != 0 || indexPath.row >= self.videos.count || [self.dragSelectedIndexPaths containsObject:indexPath]) return;
-    [self.dragSelectedIndexPaths addObject:indexPath];
-    [self.tableView selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
-    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
-    cell.accessoryType = UITableViewCellAccessoryCheckmark;
+    if (gesture.state == UIGestureRecognizerStateBegan || gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
+        CGPoint previous = self.multiSelectLastPoint;
+        NSInteger steps = MAX(1, (NSInteger)ceil(hypot(viewport.x-previous.x, viewport.y-previous.y) / 8));
+        for (NSInteger i=1; i<=steps; i++) {
+            CGFloat fraction = (CGFloat)i / steps;
+            [self selectDragPoint:CGPointMake(previous.x + (viewport.x-previous.x)*fraction + scroll.bounds.origin.x, previous.y + (viewport.y-previous.y)*fraction + scroll.bounds.origin.y)];
+        }
+        self.multiSelectLastPoint = viewport;
+    }
+    if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
+        [self.multiSelectAutoScrollTimer invalidate]; self.multiSelectAutoScrollTimer = nil;
+        self.selectionScrollView = nil;
+    }
 }
 - (NSArray<NSURL *> *)selectedVideoURLs {
     NSMutableArray *urls = [NSMutableArray array];
@@ -369,7 +448,8 @@ static UIImage *WJQRCodeImage(NSString *value) {
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self refreshVideos]; }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    if (!self.comparisonSelectionMode || self.restoredComparisonPosition || !self.videos.count) return;
+    if (!self.comparisonSelectionMode) { [self restoreLastPlaybackPosition]; return; }
+    if (self.restoredComparisonPosition || !self.videos.count) return;
     self.restoredComparisonPosition = YES;
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSString *identity = [defaults stringForKey:@"WJComparisonLastSelectedVideo"];
@@ -381,10 +461,93 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [self.tableView layoutIfNeeded];
     [self.tableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0] atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
 }
-- (void)refreshVideos { if (@available(iOS 13.0, *)) { self.videos = [ReceivedVideoManager videos]; [self.tableView reloadData]; } }
+- (void)restoreLastPlaybackPosition {
+    if (self.editing || self.comparisonSelectionMode) return;
+    NSString *filename = [NSUserDefaults.standardUserDefaults stringForKey:@"WJLastPlayedFilename"];
+    if (!filename.length) return;
+    NSUInteger row = [self.videos indexOfObjectPassingTest:^BOOL(NSURL *url, NSUInteger index, BOOL *stop) {
+        return [url.lastPathComponent isEqualToString:filename];
+    }];
+    if (row == NSNotFound) return; // A deleted video must not move the list to an unrelated item.
+    NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+    [self.view layoutIfNeeded];
+    if (self.gridMode) {
+        [self.gridView layoutIfNeeded];
+        [self.gridView scrollToItemAtIndexPath:path atScrollPosition:UICollectionViewScrollPositionCenteredVertically animated:NO];
+    } else {
+        [self.tableView layoutIfNeeded];
+        [self.tableView scrollToRowAtIndexPath:path atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
+    }
+}
+- (void)refreshVideos {
+    self.videos = [ReceivedVideoManager videos];
+    NSMutableArray *recent = [NSMutableArray array];
+    for (NSString *filename in [NSUserDefaults.standardUserDefaults stringArrayForKey:@"WJPlaybackHistory"]) {
+        for (NSURL *url in self.videos) if ([url.lastPathComponent isEqual:filename]) { [recent addObject:url]; break; }
+    }
+    self.recentVideos = recent; [self.tableView reloadData]; [self.gridView reloadData]; [self.recentView reloadData];
+}
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
+    [super setEditing:editing animated:animated]; [self.tableView setEditing:editing animated:animated];
+    self.gridView.allowsMultipleSelection = NO; [self.gridView reloadData];
+}
+- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; [self.gridView.collectionViewLayout invalidateLayout]; }
+- (void)thumbnailForURL:(NSURL *)url imageView:(UIImageView *)imageView {
+    imageView.accessibilityIdentifier = url.lastPathComponent;
+    UIImage *cached = [self.thumbnailCache objectForKey:url.lastPathComponent];
+    imageView.image = cached ?: [UIImage systemImageNamed:@"video"];
+    if (cached) return;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @autoreleasepool {
+            AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:[AVAsset assetWithURL:url]]; generator.appliesPreferredTrackTransform = YES; generator.maximumSize = CGSizeMake(480,320);
+            CGImageRef ref = [generator copyCGImageAtTime:kCMTimeZero actualTime:NULL error:nil]; UIImage *image = ref ? [UIImage imageWithCGImage:ref] : nil; if (ref) CGImageRelease(ref);
+            if (image) { [weakSelf.thumbnailCache setObject:image forKey:url.lastPathComponent]; dispatch_async(dispatch_get_main_queue(), ^{ if ([imageView.accessibilityIdentifier isEqual:url.lastPathComponent]) imageView.image = image; }); }
+        }
+    });
+}
+- (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section { return collectionView == self.recentView ? self.recentVideos.count : self.videos.count; }
+- (CGSize)collectionView:(UICollectionView *)collectionView layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)path {
+    if (collectionView == self.recentView) return CGSizeMake(145,128);
+    NSInteger columns = collectionView.bounds.size.width >= 700 ? 3 : (collectionView.bounds.size.width < 350 ? 1 : 2);
+    return CGSizeMake(floor((collectionView.bounds.size.width - 24 - (columns - 1) * 10) / columns), 238);
+}
+- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)path {
+    UICollectionViewCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:@"video" forIndexPath:path];
+    for (UIView *view in cell.contentView.subviews) [view removeFromSuperview];
+    BOOL recent = collectionView == self.recentView; NSURL *url = (recent ? self.recentVideos : self.videos)[path.item];
+    NSInteger row = [self.videos indexOfObject:url];
+    BOOL current = [url.lastPathComponent isEqual:[NSUserDefaults.standardUserDefaults stringForKey:@"WJLastPlayedFilename"]];
+    BOOL selected = [self.tableView.indexPathsForSelectedRows containsObject:[NSIndexPath indexPathForRow:row inSection:0]];
+    cell.contentView.backgroundColor = UIColor.secondarySystemBackgroundColor; cell.contentView.layer.cornerRadius = 12; cell.contentView.clipsToBounds = YES;
+    cell.contentView.layer.borderColor = (selected ? UIColor.systemBlueColor : UIColor.systemOrangeColor).CGColor; cell.contentView.layer.borderWidth = selected || current ? 3 : 0;
+    UIImageView *thumbnail = [UIImageView new]; thumbnail.contentMode = UIViewContentModeScaleAspectFill; thumbnail.clipsToBounds = YES; thumbnail.translatesAutoresizingMaskIntoConstraints = NO; [cell.contentView addSubview:thumbnail]; [self thumbnailForURL:url imageView:thumbnail];
+    UILabel *title = [UILabel new]; title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2]; title.numberOfLines = 2; title.translatesAutoresizingMaskIntoConstraints = NO; title.text = url.lastPathComponent; [cell.contentView addSubview:title];
+    [NSLayoutConstraint activateConstraints:@[[thumbnail.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:3], [thumbnail.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-3], [thumbnail.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:3], [thumbnail.heightAnchor constraintEqualToConstant:recent ? 88 : 142], [title.topAnchor constraintEqualToAnchor:thumbnail.bottomAnchor constant:4], [title.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:6], [title.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-6]]];
+    if (current || selected) { UILabel *badge = [UILabel new]; badge.text = selected ? MTJText(@" ✓ 選択中 ") : MTJText(@" 表示中 "); badge.font = [UIFont boldSystemFontOfSize:12]; badge.backgroundColor = selected ? UIColor.systemBlueColor : UIColor.systemOrangeColor; badge.textColor = UIColor.blackColor; badge.translatesAutoresizingMaskIntoConstraints = NO; [cell.contentView addSubview:badge]; [NSLayoutConstraint activateConstraints:@[[badge.leadingAnchor constraintEqualToAnchor:thumbnail.leadingAnchor constant:3], [badge.topAnchor constraintEqualToAnchor:thumbnail.topAnchor constant:3]]]; }
+    if (!recent) {
+        UITableViewCell *template = [self tableView:self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+        title.text = [NSString stringWithFormat:@"%@\n%@", [url isEqual:self.selectedMainURL] ? @"MAIN" : ([url isEqual:self.selectedSubURL] ? @"SUB" : @""), template.textLabel.text];
+        UIView *actions = template.accessoryView; actions.translatesAutoresizingMaskIntoConstraints = NO; [cell.contentView addSubview:actions];
+        [NSLayoutConstraint activateConstraints:@[[actions.centerXAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor], [actions.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-4], [actions.heightAnchor constraintEqualToConstant:44], [actions.widthAnchor constraintEqualToConstant:self.comparisonSelectionMode ? 40 : 168]]];
+    }
+    return cell;
+}
+- (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)path {
+    NSURL *url = (collectionView == self.recentView ? self.recentVideos : self.videos)[path.item];
+    NSIndexPath *row = [NSIndexPath indexPathForRow:[self.videos indexOfObject:url] inSection:0];
+    if (self.editing) {
+        if ([self.tableView.indexPathsForSelectedRows containsObject:row]) [self.tableView deselectRowAtIndexPath:row animated:NO];
+        else [self.tableView selectRowAtIndexPath:row animated:NO scrollPosition:UITableViewScrollPositionNone];
+        [collectionView deselectItemAtIndexPath:path animated:NO];
+        [self.gridView reloadData]; return;
+    }
+    [self tableView:self.tableView didSelectRowAtIndexPath:row];
+}
+
 - (void)toggleGridMode {
     NSIndexPath *anchor = self.tableView.indexPathsForVisibleRows.firstObject;
-    self.gridMode = !self.gridMode;
+    self.gridMode = !self.gridMode; self.gridView.hidden = !self.gridMode; self.tableView.hidden = self.gridMode;
     [[NSUserDefaults standardUserDefaults] setBool:self.gridMode forKey:@"WJVideoGridMode"];
     UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"写真") style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
     UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
@@ -393,13 +556,14 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [self.tableView reloadData];
     [self.tableView layoutIfNeeded];
     if (anchor && anchor.row < self.videos.count) [self.tableView scrollToRowAtIndexPath:anchor atScrollPosition:UITableViewScrollPositionTop animated:NO];
+    [self restoreLastPlaybackPosition];
 }
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    return self.gridMode ? 220.0 : UITableViewAutomaticDimension;
+    return 100.0;
 }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.videos.count; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    UITableViewCell *cell = [[WJLibraryListCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     NSURL *url = self.videos[indexPath.row];
     NSDictionary *info = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]] ?: [NSData data] options:0 error:nil];
     AVAsset *asset = [AVAsset assetWithURL:url];
@@ -415,15 +579,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     cell.textLabel.text = [prefix stringByAppendingString:[NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterMediumStyle]];
     cell.detailTextLabel.text = [NSString stringWithFormat:MTJText(@"%.0f秒・%.1f MB・%@ × %@・%@ fps・%@"), duration, size.doubleValue/1048576, width, height, fps, info[@"codec"] ?: @"?"];
     cell.detailTextLabel.numberOfLines = 0;
-    AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:[AVAsset assetWithURL:url]];
-    generator.appliesPreferredTrackTransform = YES;
-    generator.maximumSize = self.gridMode ? CGSizeMake(420, 240) : CGSizeMake(160, 100);
-    CGImageRef imageRef = [generator copyCGImageAtTime:kCMTimeZero actualTime:NULL error:nil];
-    if (imageRef) {
-        cell.imageView.image = [UIImage imageWithCGImage:imageRef];
-        if (self.gridMode) cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        CGImageRelease(imageRef);
-    }
+    [self thumbnailForURL:url imageView:cell.imageView];
     UIButton *retransferButton = [UIButton buttonWithType:UIButtonTypeSystem];
     retransferButton.tag = indexPath.row;
     retransferButton.accessibilityIdentifier = url.path;
@@ -470,16 +626,23 @@ static UIImage *WJQRCodeImage(NSString *value) {
     }
     return cell;
 }
+- (void)selectComparisonGrid:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan || self.editing) return;
+    NSIndexPath *path = [self.gridView indexPathForItemAtPoint:[gesture locationInView:self.gridView]];
+    if (path) [self selectComparisonURL:self.videos[path.item]];
+}
 - (void)selectComparisonVideo:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
     CGPoint point = [gesture locationInView:self.tableView];
     NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:point];
     if (!indexPath || indexPath.row >= self.videos.count) return;
-    NSURL *url = self.videos[indexPath.row];
+    [self selectComparisonURL:self.videos[indexPath.row]];
+}
+- (void)selectComparisonURL:(NSURL *)url {
     if ([url isEqual:self.selectedMainURL]) return;
     if (!self.selectedMainURL) {
         self.selectedMainURL = url;
-        [self.tableView reloadData];
+        [self.gridView reloadData]; [self.tableView reloadData];
         return;
     }
     // 1本目はMAINとして保持し、2本目以降の長押しは常にSUBを更新する。
@@ -504,6 +667,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
         cell.accessoryType = UITableViewCellAccessoryCheckmark;
         return;
     }
+    if (self.playbackSelectionHandler) { self.playbackSelectionHandler(self.videos[indexPath.row]); return; }
     WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:self.videos[indexPath.row]];
     [player setPlaylist:self.videos currentIndex:indexPath.row];
     [self presentViewController:player animated:YES completion:^{ [player.player play]; }];
@@ -531,7 +695,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
         return;
     }
     NSMutableArray *updated = [self.videos mutableCopy]; [updated removeObjectAtIndex:row]; self.videos = updated;
-    [self.tableView deleteRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:row inSection:0]] withRowAnimation:UITableViewRowAnimationAutomatic];
+    [self refreshVideos];
 }
 - (void)retransferVideo:(UIButton *)sender {
     NSURL *url = sender.accessibilityIdentifier.length ? [NSURL fileURLWithPath:sender.accessibilityIdentifier] : nil;
@@ -777,9 +941,10 @@ static NSString *WJRoleTitle(NSString *role) {
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if (!self.easy) return nil;
-    return MTJText(@[@"グループと役割", @"検索中・同じWi-Fiのグループ", @"接続端末一覧（メインは選択して登録解除）"][section]);
+    return MTJText(@[@"グループと役割", @"検索中・同じWi-Fiのグループ", @"接続端末一覧（未接続の端末はタップで再接続）"][section]);
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if (self.easy && section == 2) return MTJText(@"未接続の端末は名前をタップして再接続します。メイン端末ではⓘから登録を解除できます。");
     if (!self.easy || section != 0) return nil;
     return MTJText(@"メイン＋カメラ1〜3の最大4台。受信はメイン＋追加3台の最大4台です。同じWi-Fiでアプリを前景にし、ローカルネットワークを許可してください。撮影端末は接続後にカメラ画面を開いてください。");
 }
@@ -840,6 +1005,7 @@ static NSString *WJRoleTitle(NSString *role) {
         NSDictionary *group = g.groups[path.row]; c.textLabel.text = group[@"name"]; c.detailTextLabel.text = group[@"group"]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else {
         NSDictionary *member = g.members[path.row]; c.textLabel.text = member[@"name"];
+        if ([g.role isEqual:@"MAIN"]) c.accessoryType = UITableViewCellAccessoryDetailButton;
         c.detailTextLabel.text = [NSString stringWithFormat:@"%@・%@\n%@", WJRoleTitle(member[@"role"]),MTJText([member[@"connected"] isEqual:@"1"] ? @"認証済み" : @"未接続"),member[@"id"]];
     }
     return c;
@@ -863,6 +1029,17 @@ static NSString *WJRoleTitle(NSString *role) {
     }
     [a addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:a animated:YES completion:nil];
 }
+- (void)confirmRemovalOfMember:(NSDictionary *)member {
+    CameraGroupManager *g = [WaterJumpCoordinator shared].group;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:MTJText(@"端末の登録を解除") message:[NSString stringWithFormat:@"%@\n%@",member[@"name"],MTJText(@"この端末との接続が解除され、役割番号が空きます。動画は削除しません。再参加には承認が必要です。") ] preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:MTJText(@"解除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { if (![g removeMember:member[@"id"]]) [self showMessage:@"録画・転送・受信の終了後に変更してください"]; }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+- (void)tableView:(UITableView *)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)path {
+    CameraGroupManager *g = [WaterJumpCoordinator shared].group;
+    if (self.easy && path.section == 2 && [g.role isEqual:@"MAIN"] && path.row < g.members.count) [self confirmRemovalOfMember:g.members[path.row]];
+}
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
     [tableView deselectRowAtIndexPath:path animated:YES];
     CameraGroupManager *g = [WaterJumpCoordinator shared].group;
@@ -879,11 +1056,13 @@ static NSString *WJRoleTitle(NSString *role) {
     }
     if (path.section == 1) { [self selectRoleForGroup:g.groups[path.row][@"group"]]; return; }
     if (path.section == 2) {
-        if (![g.role isEqual:@"MAIN"]) return;
+        if (path.row >= g.members.count) return;
         NSDictionary *member = g.members[path.row];
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:MTJText(@"端末の登録を解除") message:[NSString stringWithFormat:@"%@\n%@",member[@"name"],MTJText(@"この端末との接続が解除され、役割番号が空きます。動画は削除しません。再参加には承認が必要です。") ] preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
-        [a addAction:[UIAlertAction actionWithTitle:MTJText(@"解除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { if (![g removeMember:member[@"id"]]) [self showMessage:@"録画・転送・受信の終了後に変更してください"]; }]]; [self presentViewController:a animated:YES completion:nil]; return;
+        if (![member[@"connected"] isEqual:@"1"]) {
+            if (![g reconnectMember:member[@"id"]]) [self showMessage:g.message];
+            [self refresh];
+        } else if ([g.role isEqual:@"MAIN"]) [self confirmRemovalOfMember:member];
+        return;
     }
     if (path.row == 0) {
         UIAlertController *a = [UIAlertController alertControllerWithTitle:MTJText(@"カメラグループを作成") message:MTJText(@"既存の通信設定を置き換え、この端末をメインにします。旧グループの端末は再設定が必要です。動画・タグは保持します。") preferredStyle:UIAlertControllerStyleAlert];
@@ -904,7 +1083,164 @@ static NSString *WJRoleTitle(NSString *role) {
 }
 @end
 
+@interface WJPreviewTouchView : UIView
+@end
+@implementation WJPreviewTouchView
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event { UIView *hit = [super hitTest:point withEvent:event]; return hit == self ? nil : hit; }
+@end
+@interface WJRemotePreviewController : UIViewController
+@property(nonatomic, strong) UIStackView *windows;
+@property(nonatomic, strong) UIButton *connectionButton;
+@property(nonatomic, strong) NSTimer *timer;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDataTask *> *requests;
+@property(nonatomic, strong) NSArray<NSDictionary *> *cameras;
+@property(nonatomic) BOOL showing;
+@end
+@implementation WJRemotePreviewController
+- (void)loadView { self.view = [WJPreviewTouchView new]; }
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.requests = [NSMutableDictionary dictionary];
+    self.connectionButton = [UIButton buttonWithType:UIButtonTypeSystem]; self.connectionButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.connectionButton setImage:[UIImage systemImageNamed:@"network"] forState:UIControlStateNormal]; self.connectionButton.tintColor = UIColor.whiteColor; self.connectionButton.backgroundColor = [UIColor colorWithWhite:0 alpha:.7]; self.connectionButton.layer.cornerRadius = 12;
+    self.connectionButton.accessibilityLabel = MTJText(@"接続情報・カメラプレビューの表示切替");
+    [self.connectionButton addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:self.connectionButton];
+    self.windows = [UIStackView new]; self.windows.axis = UILayoutConstraintAxisHorizontal; self.windows.distribution = UIStackViewDistributionFillEqually; self.windows.spacing = 8; self.windows.translatesAutoresizingMaskIntoConstraints = NO; self.windows.hidden = YES; [self.view addSubview:self.windows];
+    [NSLayoutConstraint activateConstraints:@[[self.connectionButton.widthAnchor constraintEqualToConstant:44], [self.connectionButton.heightAnchor constraintEqualToConstant:44], [self.windows.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor constant:110], [self.windows.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [self.windows.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor], [self.windows.heightAnchor constraintEqualToConstant:140]]];
+}
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self startTimer]; }
+- (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; [self.timer invalidate]; self.timer = nil; for (NSURLSessionDataTask *task in self.requests.allValues) [task cancel]; [self.requests removeAllObjects]; }
+- (void)dealloc { [_timer invalidate]; for (NSURLSessionDataTask *task in _requests.allValues) [task cancel]; }
+- (void)startTimer { [self.timer invalidate]; if (!self.showing) return; __weak typeof(self) weakSelf = self; self.timer = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) { [weakSelf refresh]; }]; [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes]; [self refresh]; }
+- (void)toggle { self.showing = !self.showing; self.windows.hidden = !self.showing; self.connectionButton.tintColor = self.showing ? UIColor.systemGreenColor : UIColor.whiteColor; if (self.showing) [self startTimer]; else { [self.timer invalidate]; self.timer = nil; for (NSURLSessionDataTask *task in self.requests.allValues) [task cancel]; [self.requests removeAllObjects]; } }
+- (void)refresh {
+    if (!self.showing || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    NSArray *cameras = [WaterJumpCoordinator shared].remoteCameras;
+    if (![cameras isEqual:self.cameras]) {
+        for (NSURLSessionDataTask *task in self.requests.allValues) [task cancel]; [self.requests removeAllObjects]; self.cameras = cameras;
+        for (UIView *view in self.windows.arrangedSubviews) { [self.windows removeArrangedSubview:view]; [view removeFromSuperview]; }
+        NSArray *display = cameras.count ? cameras : @[@{@"name":MTJText(@"カメラ未接続"), @"id":@"none"}];
+        for (NSDictionary *camera in display) {
+            UIView *card = [UIView new]; card.backgroundColor = UIColor.blackColor; card.layer.cornerRadius = 8; card.clipsToBounds = YES;
+            UILabel *name = [UILabel new]; name.text = camera[@"name"]; name.textAlignment = NSTextAlignmentCenter; name.textColor = UIColor.whiteColor; name.font = [UIFont boldSystemFontOfSize:12]; name.translatesAutoresizingMaskIntoConstraints = NO;
+            UIImageView *image = [UIImageView new]; image.contentMode = UIViewContentModeScaleAspectFit; image.tag = 101; image.translatesAutoresizingMaskIntoConstraints = NO;
+            UILabel *error = [UILabel new]; error.text = MTJText(@"接続を確認中…"); error.textColor = UIColor.systemRedColor; error.font = [UIFont systemFontOfSize:12]; error.numberOfLines = 0; error.textAlignment = NSTextAlignmentCenter; error.tag = 102; error.translatesAutoresizingMaskIntoConstraints = NO;
+            [card addSubview:image]; [card addSubview:name]; [card addSubview:error]; [self.windows addArrangedSubview:card];
+            [NSLayoutConstraint activateConstraints:@[[name.topAnchor constraintEqualToAnchor:card.topAnchor constant:3], [name.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:2], [name.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-2], [name.heightAnchor constraintEqualToConstant:20], [image.topAnchor constraintEqualToAnchor:name.bottomAnchor], [image.leadingAnchor constraintEqualToAnchor:card.leadingAnchor], [image.trailingAnchor constraintEqualToAnchor:card.trailingAnchor], [image.bottomAnchor constraintEqualToAnchor:card.bottomAnchor], [error.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:4], [error.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-4], [error.topAnchor constraintEqualToAnchor:name.bottomAnchor], [error.bottomAnchor constraintEqualToAnchor:card.bottomAnchor]]];
+        }
+    }
+    if (!cameras.count) { UILabel *label = [self.windows.arrangedSubviews.firstObject viewWithTag:102]; label.text = MTJText(@"設定からカメラを接続してください"); return; }
+    for (NSInteger i = 0; i < cameras.count; i++) {
+        NSDictionary *camera = cameras[i]; UIView *card = self.windows.arrangedSubviews[i]; UIImageView *image = [card viewWithTag:101]; UILabel *errorLabel = [card viewWithTag:102]; NSString *identifier = camera[@"id"];
+        if (![camera[@"connected"] boolValue]) { image.image = nil; errorLabel.text = MTJText(@"未接続：同じWi-Fiと撮影端末の前景起動を確認"); errorLabel.hidden = NO; continue; }
+        if (self.requests[identifier]) continue;
+        NSURLComponents *parts = [NSURLComponents componentsWithString:camera[@"url"]]; NSString *token = parts.fragment; parts.fragment = nil;
+        if (!parts.URL || !token.length) { image.image = nil; errorLabel.text = MTJText(@"接続情報を更新中"); errorLabel.hidden = NO; continue; }
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[parts.URL URLByAppendingPathComponent:@"preview"]]; request.timeoutInterval = 2.5;
+        [request setValue:token forHTTPHeaderField:@"X-MTJudge-Token"]; [request setValue:[WaterJumpCoordinator shared].group.groupID forHTTPHeaderField:@"X-MTJudge-Group"];
+        __weak typeof(self) weakSelf = self;
+        NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSDictionary *reply = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            NSData *jpeg = [reply[@"image"] isKindOfClass:NSString.class] ? [[NSData alloc] initWithBase64EncodedString:reply[@"image"] options:0] : nil;
+            UIImage *frame = jpeg ? [UIImage imageWithData:jpeg] : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) self = weakSelf; if (!self) return; [self.requests removeObjectForKey:identifier];
+                if (!self.showing || ![self.windows.arrangedSubviews containsObject:card]) return;
+                if (!error && [(NSHTTPURLResponse *)response statusCode] == 200 && frame) { image.image = frame; errorLabel.hidden = YES; }
+                else { image.image = nil; errorLabel.hidden = NO; errorLabel.text = error.localizedDescription ?: reply[@"error"] ?: MTJText(@"プレビューを受信できません。撮影端末を更新しカメラ画面を開いてください。"); }
+            });
+        }]; self.requests[identifier] = task; [task resume];
+    }
+}
+@end
+
+@interface WJPlaybackScreen : UIViewController <MTJReceivedPlaybackHost, UIGestureRecognizerDelegate>
+@property(nonatomic, strong) UIButton *syncButton;
+@property(nonatomic, strong) UIStackView *controls;
+@property(nonatomic, strong) UILabel *statusLabel;
+@property(nonatomic, strong) WaterJumpReceivedPlayerViewController *embeddedPlayer;
+@property(nonatomic, strong) WaterJumpComparisonViewController *embeddedComparison;
+@property(nonatomic) BOOL presentedInitialList;
+@end
+@implementation WJPlaybackScreen
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.view.backgroundColor = UIColor.blackColor;
+    UILabel *brand = [UILabel new]; brand.text = @"MTJudge"; brand.font = [UIFont boldSystemFontOfSize:36]; brand.textColor = [UIColor colorWithWhite:.55 alpha:1]; brand.textAlignment = NSTextAlignmentCenter; brand.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:brand]; [NSLayoutConstraint activateConstraints:@[[brand.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor], [brand.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor]]];
+    UITapGestureRecognizer *statusTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleComparisonPlayback)]; statusTap.delegate = self; statusTap.cancelsTouchesInView = NO; [self.view addGestureRecognizer:statusTap];
+    UIButton *library = [self button:@"rectangle.stack" label:@"練習動画を選択" action:@selector(openLibrary)];
+    UIButton *settings = [self button:@"gearshape" label:@"リモート操作モード" action:@selector(openSettings)];
+    self.controls = [[UIStackView alloc] initWithArrangedSubviews:@[library,settings]]; self.controls.axis = UILayoutConstraintAxisVertical; self.controls.spacing = 4; self.controls.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:self.controls];
+    self.syncButton = [self button:@"record.circle.fill" label:@"接続中カメラの同期録画開始・停止" action:@selector(toggleSync)]; self.syncButton.tintColor = UIColor.systemOrangeColor; self.syncButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.syncButton setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:48 weight:UIImageSymbolWeightRegular] forImageInState:UIControlStateNormal]; [self.view addSubview:self.syncButton];
+    self.statusLabel = [UILabel new]; self.statusLabel.textColor = UIColor.whiteColor; self.statusLabel.numberOfLines = 0; self.statusLabel.font = [UIFont systemFontOfSize:13]; self.statusLabel.textAlignment = NSTextAlignmentCenter; self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:self.statusLabel];
+    [NSLayoutConstraint activateConstraints:@[[self.controls.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12], [self.controls.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:60], [self.syncButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16], [self.syncButton.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor], [self.syncButton.widthAnchor constraintEqualToConstant:64], [self.syncButton.heightAnchor constraintEqualToConstant:64], [self.statusLabel.leadingAnchor constraintEqualToAnchor:self.controls.trailingAnchor constant:12], [self.statusLabel.trailingAnchor constraintEqualToAnchor:self.syncButton.leadingAnchor constant:-12], [self.statusLabel.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-36]]];
+    [WaterJumpSettingsViewController installRemotePreviewOn:self recordingButton:self.syncButton];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshStatus) name:WJStatusChanged object:nil]; [self refreshStatus];
+}
+- (UIButton *)button:(NSString *)symbol label:(NSString *)label action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem]; [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal]; button.accessibilityLabel = MTJText(label); button.tintColor = UIColor.whiteColor; button.backgroundColor = [UIColor colorWithWhite:.1 alpha:.8]; button.layer.cornerRadius = 14; [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside]; [button.widthAnchor constraintGreaterThanOrEqualToConstant:44].active = YES; [button.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES; return button;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture shouldReceiveTouch:(UITouch *)touch {
+    if (!self.embeddedComparison || [touch.view isDescendantOfView:self.embeddedComparison.view]) return NO;
+    for (UIView *view = touch.view; view && view != self.view; view = view.superview) if ([view isKindOfClass:UIControl.class] || [view isKindOfClass:UIScrollView.class]) return NO;
+    return [touch locationInView:self.view].y >= CGRectGetMaxY(self.embeddedComparison.view.frame);
+}
+- (void)toggleComparisonPlayback { [self.embeddedComparison togglePlayback]; }
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [WaterJumpCoordinator shared].playbackHost = self; if (!self.presentedInitialList) { self.presentedInitialList = YES; [self openLibrary]; } }
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)refreshStatus { BOOL recording = [WaterJumpCoordinator shared].remoteOnlyRecording; [self.syncButton setImage:[UIImage systemImageNamed:recording ? @"stop.circle.fill" : @"record.circle.fill"] forState:UIControlStateNormal]; self.statusLabel.text = [WaterJumpCoordinator shared].message; }
+- (void)toggleSync { NSString *error = [[WaterJumpCoordinator shared] toggleRemoteOnlyRecording]; if (error) { UIAlertController *alert = [UIAlertController alertControllerWithTitle:MTJText(@"同期録画") message:MTJText(error) preferredStyle:UIAlertControllerStyleAlert]; [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]]; [self presentViewController:alert animated:YES completion:nil]; } }
+- (void)openSettings { if (self.presentedViewController) return; [self presentViewController:[[UINavigationController alloc] initWithRootViewController:[WaterJumpSettingsViewController remoteSetupViewController]] animated:YES completion:nil]; }
+- (void)openLibrary {
+    if (self.presentedViewController) return;
+    [self.embeddedPlayer.player pause]; [self.embeddedComparison pausePlayback];
+    WJVideoLibrary *library = [WJVideoLibrary new]; UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:library];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    nav.sheetPresentationController.detents = @[[UISheetPresentationControllerDetent customDetentWithIdentifier:@"videoLibrary" resolver:^CGFloat(id<UISheetPresentationControllerDetentResolutionContext> context) { return context.maximumDetentValue * .8; }], UISheetPresentationControllerDetent.largeDetent]; nav.sheetPresentationController.prefersGrabberVisible = YES;
+    __weak typeof(self) weakSelf = self; __weak UINavigationController *weakNav = nav;
+    library.playbackSelectionHandler = ^(NSURL *url) { [weakNav dismissViewControllerAnimated:YES completion:^{ [weakSelf playURL:url]; }]; };
+    [self presentViewController:nav animated:YES completion:nil];
+}
+- (BOOL)displayReceivedMainURL:(NSURL *)mainURL subURL:(NSURL *)subURL {
+    if (!self.view.window || self.presentedViewController || self.tabBarController.selectedViewController != self) return NO;
+    if (!subURL) { [self playURL:mainURL]; return YES; }
+    [self clearEmbedded];
+    WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:subURL]; self.embeddedComparison = comparison;
+    comparison.showsReceivedCameraNames = YES;
+    [self addChildViewController:comparison]; comparison.view.frame = CGRectMake(0,0,self.view.bounds.size.width,MAX(0,self.view.bounds.size.height - 150)); comparison.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [self.view insertSubview:comparison.view atIndex:1]; [comparison didMoveToParentViewController:self];
+    __weak typeof(self) weakSelf = self; comparison.closeHandler = ^{ weakSelf.embeddedComparison = nil; }; [comparison startPlayback]; return YES;
+}
+- (void)clearEmbedded {
+    self.controls.hidden = NO;
+    if (self.embeddedComparison) { [self.embeddedComparison prepareForAutoplayReplacement]; [self.embeddedComparison willMoveToParentViewController:nil]; [self.embeddedComparison.view removeFromSuperview]; [self.embeddedComparison removeFromParentViewController]; self.embeddedComparison = nil; }
+    if (self.embeddedPlayer) { [self.embeddedPlayer prepareForAutoplayReplacement]; [self.embeddedPlayer willMoveToParentViewController:nil]; [self.embeddedPlayer.view removeFromSuperview]; [self.embeddedPlayer removeFromParentViewController]; self.embeddedPlayer = nil; }
+}
+- (void)playURL:(NSURL *)url {
+    [self clearEmbedded];
+    WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url]; NSArray *videos = [ReceivedVideoManager videos]; NSUInteger index = [videos indexOfObject:url]; [player setPlaylist:videos currentIndex:index == NSNotFound ? 0 : index]; self.embeddedPlayer = player;
+    [self addChildViewController:player]; player.view.frame = CGRectMake(0, 0, self.view.bounds.size.width, MAX(0, self.view.bounds.size.height - 150)); player.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [self.view insertSubview:player.view atIndex:1]; [player didMoveToParentViewController:self];
+    __weak typeof(self) weakSelf = self; player.drawingModeChangedHandler = ^(BOOL drawing) { weakSelf.controls.hidden = drawing; };
+    player.closeHandler = ^{ weakSelf.controls.hidden = NO; weakSelf.embeddedPlayer = nil; }; [player.player play];
+}
+- (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; [self.embeddedPlayer.player pause]; [self.embeddedComparison pausePlayback]; }
+- (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; if (self.tabBarController.selectedViewController != self && [WaterJumpCoordinator shared].playbackHost == self) [WaterJumpCoordinator shared].playbackHost = nil; }
+@end
+
 @implementation WaterJumpSettingsViewController
++ (UIViewController *)playbackScreenViewController { return [WJPlaybackScreen new]; }
++ (void)installRemotePreviewOn:(UIViewController *)host recordingButton:(UIView *)recordingButton {
+    WJRemotePreviewController *preview = [WJRemotePreviewController new];
+    [host addChildViewController:preview]; preview.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [host.view addSubview:preview.view]; [preview didMoveToParentViewController:host];
+    [NSLayoutConstraint activateConstraints:@[
+        [preview.view.leadingAnchor constraintEqualToAnchor:host.view.safeAreaLayoutGuide.leadingAnchor constant:16],
+        [preview.view.trailingAnchor constraintEqualToAnchor:host.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
+        [preview.view.topAnchor constraintEqualToAnchor:host.view.topAnchor],
+        [preview.view.bottomAnchor constraintEqualToAnchor:host.view.bottomAnchor],
+        [preview.connectionButton.centerXAnchor constraintEqualToAnchor:recordingButton.centerXAnchor],
+        [preview.connectionButton.bottomAnchor constraintEqualToAnchor:recordingButton.topAnchor constant:-12]
+    ]];
+}
 + (UIViewController *)remoteSetupViewController { return [WJSetupMenu new]; }
 + (void)presentCameraNameFrom:(UIViewController *)host {
     UIAlertController *a = [UIAlertController alertControllerWithTitle:MTJText(@"この端末のカメラ名") message:nil preferredStyle:UIAlertControllerStyleAlert];

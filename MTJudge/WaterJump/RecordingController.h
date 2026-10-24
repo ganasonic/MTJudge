@@ -12,6 +12,7 @@
 - (instancetype)initWithRecorder:(VideoRecorder *)recorder;
 - (BOOL)startAutomatic:(BOOL)automatic error:(NSError **)error;
 @property (nonatomic) NSTimeInterval duration;
+- (NSDictionary *)previewSnapshot;
 - (void)didStart;
 - (BOOL)stop;
 - (void)finishedWithError:(NSError *)error;

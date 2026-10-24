@@ -54,6 +54,7 @@
     if ((self = [super init])) { _recorder = recorder; _state = @"READY"; _duration = 20; }
     return self;
 }
+- (NSDictionary *)previewSnapshot { return [self.recorder remotePreviewSnapshot]; }
 - (BOOL)busy { return [@[@"RECORDING", @"STOPPING", @"SAVING"] containsObject:self.state]; }
 - (void)notify {
 #if DEBUG
@@ -68,6 +69,7 @@
         return NO;
     }
     self.automaticRecording = automatic;
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"WJRemoteStartInProgress"]) [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"WJRecordingRemoteOnly"];
     if (automatic) {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         BOOL remoteStart = [defaults boolForKey:@"WJRemoteStartInProgress"];
@@ -91,7 +93,7 @@
     return YES;
 }
 - (void)didStart {
-    if (!self.automaticRecording || ![self.state isEqual:@"RECORDING"]) return;
+    if (![self.state isEqual:@"RECORDING"]) return;
     [self.timer invalidate];
     __weak typeof(self) weakSelf = self;
     // duration == 0 は設定画面の「ー（手動停止）」。
@@ -101,7 +103,8 @@
 #endif
         return;
     }
-    NSTimeInterval duration = [@[@10,@15,@20,@30,@45,@60] containsObject:@(self.duration)] ? self.duration : 20;
+    NSTimeInterval duration = self.duration;
+    if (!isfinite(duration) || duration <= 0) return;
     self.timer = [NSTimer timerWithTimeInterval:duration repeats:NO block:^(NSTimer *timer) { [weakSelf stop]; }];
     [[NSRunLoop mainRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];
 #if DEBUG

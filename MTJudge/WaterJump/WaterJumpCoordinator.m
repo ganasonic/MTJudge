@@ -20,6 +20,11 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 @property (nonatomic, strong) NSURL *pendingPlaybackURL;
 @property (nonatomic, strong) NSURL *pendingComparisonURL;
 @property (nonatomic) BOOL playbackTransitionInProgress;
+@property (nonatomic, readwrite) BOOL remoteOnlyRecording;
+@property (nonatomic, strong) NSString *remoteOnlySessionID;
+@property (nonatomic, strong) NSArray<NSDictionary *> *remoteOnlyTargets;
+@property (nonatomic, strong) NSTimer *remoteOnlyStopTimer;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSURL *> *remoteOnlyVideos;
 @end
 @implementation WaterJumpCoordinator
 - (UIViewController *)activePresentationHost {
@@ -62,7 +67,8 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     if (![self shouldAutoPlayReceived]) {
         self.pendingPlaybackURL = nil; self.pendingComparisonURL = nil; return;
     }
-    if (self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (self.recordingBusy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (self.playbackHost && [self.playbackHost displayReceivedMainURL:self.pendingPlaybackURL subURL:self.pendingComparisonURL]) { self.pendingPlaybackURL = nil; self.pendingComparisonURL = nil; return; }
     UIViewController *top = [self activePresentationHost];
     if (!top) return;
     BOOL transitioning = NO;
@@ -95,6 +101,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         UIViewController *next;
         if (subURL && [NSUserDefaults.standardUserDefaults boolForKey:@"WJCompareAfterTransfer"]) {
             WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:url subURL:subURL];
+            comparison.showsReceivedCameraNames = YES;
             self.comparisonPlayer = comparison; next = comparison;
         } else {
             WaterJumpReceivedPlayerViewController *player = [[WaterJumpReceivedPlayerViewController alloc] initWithVideoURL:url];
@@ -129,6 +136,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         __weak typeof(self) weakSelf = self;
         _server.command = ^NSDictionary *(NSString *command) { return [weakSelf command:command]; };
         _server.status = ^NSDictionary *{ return [weakSelf status]; };
+        _server.preview = ^NSDictionary *{ return [weakSelf.recording previewSnapshot] ?: @{@"error":@"カメラ画面を開いてください"}; };
         _server.changed = ^{ [weakSelf.group configureWithActive:UIApplication.sharedApplication.applicationState == UIApplicationStateActive remoteAddress:weakSelf.remoteAddress ?: @""]; [weakSelf publish]; };
         _watch = [WatchRemoteController new];
         _watch.command = _server.command;
@@ -169,6 +177,21 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     return self;
 }
 - (void)handleReceivedURL:(NSURL *)url {
+    NSDictionary *receivedInfo = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]] ?: [NSData data] options:0 error:nil];
+    if ([receivedInfo[@"remoteOnly"] boolValue] || (self.remoteOnlySessionID.length && [receivedInfo[@"sessionID"] isEqual:self.remoteOnlySessionID])) {
+        NSString *session = receivedInfo[@"sessionID"] ?: url.lastPathComponent;
+        NSMutableDictionary *videos = self.receivedSessions[session];
+        if (!videos) { videos = [NSMutableDictionary dictionary]; self.receivedSessions[session] = videos; }
+        NSString *source = receivedInfo[@"sourceCameraID"];
+        NSString *sender = source.length ? source : (receivedInfo[@"senderID"] ?: receivedInfo[@"cameraName"] ?: url.lastPathComponent);
+        videos[sender] = url;
+        NSMutableArray *ordered = [NSMutableArray array];
+        if ([session isEqual:self.remoteOnlySessionID]) for (NSDictionary *target in self.remoteOnlyTargets) if (videos[target[@"id"]]) [ordered addObject:videos[target[@"id"]]];
+        if (!ordered.count) for (NSString *key in [videos.allKeys sortedArrayUsingSelector:@selector(compare:)]) [ordered addObject:videos[key]];
+        if (ordered.count >= 2 && [NSUserDefaults.standardUserDefaults boolForKey:@"WJCompareAfterTransfer"]) [self presentComparisonMainURL:ordered[0] subURL:ordered[1]];
+        else { self.waitingReceivedURL = ordered.firstObject; [self displayReceived]; }
+        return;
+    }
     // 受信待機中に本体録画が直前に完了している場合は、メタデータを介さず
     // その2本を直接比較画面へ渡す。旧版サイドカーの役割誤りで単独再生に
     // フォールバックする経路をここで遮断する。
@@ -270,7 +293,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
 - (NSArray<NSDictionary *> *)transferQueueEntries { return self.transfer.transferQueueEntries; }
 - (NSString *)removeTransferEntries:(NSArray<NSString *> *)keys { return [self.transfer removeTransferEntries:keys]; }
 - (BOOL)protectsVideo:(NSURL *)url { if (!url) return NO; if (@available(iOS 13.0, *)) return [self.transfer protects:url]; return NO; }
-- (BOOL)recordingBusy { return self.recording.busy; }
+- (BOOL)recordingBusy { return self.recording.busy || self.remoteOnlyRecording; }
 - (BOOL)communicationBusy { return self.transfer.communicationBusy; }
 - (BOOL)transferNeedsRetry { return self.transfer.needsRetry; }
 - (NSString *)pairingCode { if (@available(iOS 13.0, *)) return self.transfer.discovery.pairingCode; return @"iOS 13以降が必要です"; }
@@ -286,7 +309,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         return;
     }
     if (!self.waitingReceivedURL) { [self drainPendingPlayback]; return; }
-    if (self.recording.busy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (self.recordingBusy || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
     self.pendingPlaybackURL = self.waitingReceivedURL;
     self.pendingComparisonURL = nil;
     self.waitingReceivedURL = nil;
@@ -337,6 +360,61 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     [self.transfer enqueue:url metadata:info];
 }
 
+- (NSArray<NSDictionary *> *)remoteCameras {
+    NSMutableArray *result = [NSMutableArray array];
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    for (NSInteger index = 1; index <= 3; index++) {
+        NSString *suffix = index == 1 ? @"" : [@(index) stringValue];
+        NSString *role = [NSString stringWithFormat:@"CAMERA_%ld", (long)index];
+        NSDictionary *member = nil;
+        for (NSDictionary *candidate in self.group.members) if ([candidate[@"role"] isEqual:role]) { member = candidate; break; }
+        NSString *url = [d stringForKey:[@"WJSubCamera" stringByAppendingFormat:@"%@URL", suffix]] ?: @"";
+        BOOL use = [d boolForKey:[@"WJUseSubCamera" stringByAppendingString:suffix]];
+        if (self.group.automatic ? !member : !use) continue;
+        [result addObject:@{@"id":member[@"id"] ?: role, @"name":member[@"name"] ?: [NSString stringWithFormat:@"カメラ%ld", (long)index], @"url":url, @"connected":@(self.group.automatic ? [member[@"connected"] isEqual:@"1"] && url.length > 0 : url.length > 0)}];
+    }
+    return result;
+}
+- (void)sendRemoteOnlyCommand:(NSString *)command {
+    NSString *session = self.remoteOnlySessionID;
+    for (NSDictionary *camera in self.remoteOnlyTargets) {
+        NSURLComponents *parts = [NSURLComponents componentsWithString:camera[@"url"]]; NSString *token = parts.fragment; parts.fragment = nil;
+        if (!token.length || !parts.URL) continue;
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[parts.URL URLByAppendingPathComponent:command.lowercaseString]];
+        request.HTTPMethod = @"POST"; request.timeoutInterval = 5;
+        [request setValue:token forHTTPHeaderField:@"X-MTJudge-Token"];
+        [request setValue:session forHTTPHeaderField:@"X-MTJudge-Session"];
+        [request setValue:@"1" forHTTPHeaderField:@"X-MTJudge-Remote-Only"];
+        [request setValue:self.group.groupID forHTTPHeaderField:@"X-MTJudge-Group"];
+        [request setValue:[NSString stringWithFormat:@"%.3f", [NSUserDefaults.standardUserDefaults doubleForKey:@"WJDuration"]] forHTTPHeaderField:@"X-MTJudge-Duration"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSDictionary *reply = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            if (error || [(NSHTTPURLResponse *)response statusCode] != 200 || reply[@"error"]) dispatch_async(dispatch_get_main_queue(), ^{
+                self.message = [NSString stringWithFormat:@"%@：%@", camera[@"name"], error.localizedDescription ?: reply[@"error"] ?: @"録画指示に応答がありません"]; [self publish];
+            });
+        }] resume];
+    }
+}
+- (NSString *)toggleRemoteOnlyRecording {
+    if (self.remoteOnlyRecording) {
+        [self.remoteOnlyStopTimer invalidate]; self.remoteOnlyStopTimer = nil;
+        [self sendRemoteOnlyCommand:@"STOP"]; self.remoteOnlyRecording = NO;
+        self.message = @"同期録画の停止を指示しました。動画の受信待ちです。"; [self publish]; [self drainPendingPlayback]; return nil;
+    }
+    if (self.recording.busy) return @"この端末の録画・保存が終了してから操作してください。";
+    if (self.group.automatic && ![self.group.role isEqual:@"MAIN"]) return @"この操作はメイン受信端末で利用できます。";
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"WJReceive"]) return @"この端末で受信待機をONにしてください。";
+    NSMutableArray *targets = [NSMutableArray array];
+    for (NSDictionary *camera in self.remoteCameras) if ([camera[@"connected"] boolValue]) [targets addObject:camera];
+    if (!targets.count) return @"接続中のカメラがありません。接続情報と各撮影端末のカメラ画面を確認してください。";
+    self.remoteOnlySessionID = NSUUID.UUID.UUIDString; self.remoteOnlyTargets = targets;
+    self.remoteOnlyVideos = [NSMutableDictionary dictionary]; self.remoteOnlyRecording = YES;
+    [NSUserDefaults.standardUserDefaults setObject:self.remoteOnlySessionID forKey:@"WJSessionID"];
+    [self sendRemoteOnlyCommand:@"START"];
+    NSTimeInterval seconds = [NSUserDefaults.standardUserDefaults doubleForKey:@"WJDuration"];
+    if (isfinite(seconds) && seconds > 0) { __weak typeof(self) weakSelf = self; self.remoteOnlyStopTimer = [NSTimer timerWithTimeInterval:seconds + 0.5 repeats:NO block:^(NSTimer *timer) { if (weakSelf.remoteOnlyRecording) [weakSelf toggleRemoteOnlyRecording]; }]; [NSRunLoop.mainRunLoop addTimer:self.remoteOnlyStopTimer forMode:NSRunLoopCommonModes]; }
+    self.message = @"接続中のカメラへ同期録画開始を指示しました。"; [self publish]; return nil;
+}
 - (void)sendSubCameraCommand:(NSString *)command {
     if (self.group.automatic && ![self.group.role isEqual:@"MAIN"]) return;
     NSArray<NSString *> *rawURLs = @[
@@ -363,6 +441,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
     [request setValue:token forHTTPHeaderField:@"X-MTJudge-Token"];
+    [request setValue:[NSString stringWithFormat:@"%.3f", [NSUserDefaults.standardUserDefaults doubleForKey:@"WJDuration"]] forHTTPHeaderField:@"X-MTJudge-Duration"];
     if (self.group.automatic) [request setValue:self.group.groupID forHTTPHeaderField:@"X-MTJudge-Group"];
     NSString *sessionID = [[NSUserDefaults standardUserDefaults] stringForKey:@"WJSessionID"];
     if (sessionID.length) [request setValue:sessionID forHTTPHeaderField:@"X-MTJudge-Session"];
@@ -410,6 +489,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
         UIViewController *host = self.receivedPlayer.presentingViewController ?: [self activePresentationHost];
         if (!host) return;
         self.comparisonPlayer = [[WaterJumpComparisonViewController alloc] initWithMainURL:url subURL:subURL];
+        self.comparisonPlayer.showsReceivedCameraNames = YES;
         void (^presentComparison)(void) = ^{
             [host presentViewController:self.comparisonPlayer animated:YES completion:^{ [self.comparisonPlayer startPlayback]; }];
         };
@@ -418,7 +498,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     });
 }
 - (NSDictionary *)status {
-    BOOL ready = self.recording && !self.recording.busy && self.modeEnabled && self.recording.canStart && self.recording.canStart() && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+    BOOL ready = self.recording && !self.recordingBusy && self.modeEnabled && self.recording.canStart && self.recording.canStart() && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
     NSString *state = self.recording.state ?: @"IDLE";
     NSString *message = self.message;
     if (@available(iOS 13.0, *)) {
@@ -427,6 +507,7 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
             if (self.transfer.message.length) message = self.transfer.message;
         }
     }
+    if (self.remoteOnlyRecording) { state = @"RECORDING"; message = @"接続カメラを同期録画中（この端末では録画しません）"; }
     if ([state isEqual:@"SAVED"] || [state isEqual:@"TRANSFERRED"]) state = @"COMPLETE";
     return @{@"state":state, @"recordingState":self.recording.state ?: @"IDLE", @"canStart":@(ready), @"message":self.server.errorMessage.length ? self.server.errorMessage : message};
 }
@@ -435,7 +516,9 @@ NSString * const WJStatusChanged = @"WJStatusChanged";
     NSLog(@"[Remote] %@ received", command);
 #endif
     if (!self.modeEnabled || !self.recording || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return @{@"error":@"撮影端末でリモート操作モードをONにし、カメラ画面を開いてください。"};
+    if ([command isEqual:@"START"] && self.remoteOnlyRecording) return @{@"error":@"接続カメラの同期録画中です。停止してから本体録画を開始してください。"};
     if ([command isEqual:@"START"]) {
+        self.recording.duration = self.server.requestedRecordingDuration ? self.server.requestedRecordingDuration.doubleValue : [NSUserDefaults.standardUserDefaults doubleForKey:@"WJDuration"];
         NSError *error = nil;
         if (![self.recording startAutomatic:YES error:&error]) return @{@"error":error.localizedDescription ?: @"録画中または保存中です。"};
     } else if ([command isEqual:@"STOP"]) [self.recording stop];

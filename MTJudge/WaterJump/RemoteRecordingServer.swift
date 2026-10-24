@@ -6,6 +6,8 @@ import Darwin
 // one request per connection. Commands require a session token and POST.
 @objc public final class RemoteRecordingServer: NSObject {
     @objc public var command: ((String) -> [String: Any])?
+    @objc public var preview: (() -> [String: Any])?
+    @objc public private(set) var requestedRecordingDuration: NSNumber?
     @objc public var status: (() -> [String: Any])?
     @objc public var changed: (() -> Void)?
     @objc public private(set) var address = ""
@@ -96,11 +98,14 @@ import Darwin
         }
         if let origin = headers["origin"], origin != "http://" + (headers["host"] ?? "") { respond(id, 403, [:]); return }
         if method == "GET" && path == "/status" { respond(id, 200, status?() ?? ["state":"IDLE"]); return }
+        if method == "GET" && path == "/preview" { respond(id, 200, preview?() ?? ["error":"カメラ画面を開いてください"]); return }
         guard method == "POST", ["/start", "/stop"].contains(path) else { respond(id, 404, [:]); return }
         let isRemoteStart = method == "POST" && path == "/start"
+        if isRemoteStart, let raw = headers["x-mtjudge-duration"], let seconds = Double(raw), seconds.isFinite, seconds >= 0 { requestedRecordingDuration = NSNumber(value:seconds) }
+        if isRemoteStart { UserDefaults.standard.set(headers["x-mtjudge-remote-only"] == "1", forKey:"WJRecordingRemoteOnly") }
         if isRemoteStart { UserDefaults.standard.set(true, forKey: "WJRemoteStartInProgress") }
         let response = command?(path == "/start" ? "START" : "STOP") ?? ["error":"カメラ画面を開いてください"]
-        if isRemoteStart { UserDefaults.standard.set(false, forKey: "WJRemoteStartInProgress") }
+        if isRemoteStart { UserDefaults.standard.set(false, forKey: "WJRemoteStartInProgress"); requestedRecordingDuration = nil }
         respond(id, response["error"] == nil ? 200 : 409, response)
     }
     private func respond(_ id: UUID, _ code: Int, _ object: [String: Any]) {

@@ -55,28 +55,69 @@ static CGAffineTransform WJDrawingNormalizedTrackTransform(AVAssetTrack *track) 
     CGAffineTransform t = track.preferredTransform; t.tx -= rect.origin.x; t.ty -= rect.origin.y; return t;
 }
 
-// 軸描画の時計方向セクター。角度は画面座標系（12時方向が -90度）で扱う。
-static void WJDrawAxisSectors(CGContextRef ctx, CGPoint center, CGFloat radius, NSString *tool) {
-    UIColor *yellow = [UIColor.yellowColor colorWithAlphaComponent:.20];
-    UIColor *green = [UIColor.systemGreenColor colorWithAlphaComponent:.20];
-    UIColor *red = [UIColor.systemRedColor colorWithAlphaComponent:.20];
-    CGContextSetFillColorWithColor(ctx, yellow.CGColor);
-    CGContextMoveToPoint(ctx, center.x, center.y);
-    CGContextAddArc(ctx, center.x, center.y, radius, 0, (CGFloat)(M_PI * 2), false);
-    CGContextClosePath(ctx); CGContextFillPath(ctx);
-    NSArray *sectors = nil;
-    if ([tool isEqualToString:@"軸1"]) sectors = @[@[@(-105), @(-75), green], @[@(75), @(105), green], @[@(-45), @(45), red], @[@(135), @(225), red]];
-    else if ([tool isEqualToString:@"軸2"]) sectors = @[@[@(-120), @(-60), green], @[@(60), @(120), green], @[@(-30), @(30), red], @[@(150), @(210), red]];
-    else sectors = @[@[@(-105), @(-75), red], @[@(75), @(105), red], @[@(-30), @(30), green], @[@(150), @(210), green]];
-    for (NSArray *sector in sectors) {
-        CGFloat start = [sector[0] doubleValue] * M_PI / 180.0, end = [sector[1] doubleValue] * M_PI / 180.0;
-        CGContextSetFillColorWithColor(ctx, [sector[2] CGColor]); CGContextMoveToPoint(ctx, center.x, center.y);
-        CGContextAddArc(ctx, center.x, center.y, radius, start, end, false); CGContextClosePath(ctx); CGContextFillPath(ctx);
-    }
+// Axis names are stored as 軸1 / 軸2 for compatibility with existing annotations.
+// Screen angles retain the existing color sectors; 12 o'clock is -90 degrees.
+static NSArray<UIColor *> *WJAxisColors(void) { return @[UIColor.yellowColor, UIColor.systemRedColor, UIColor.systemGreenColor]; }
+static NSInteger WJAxisColorIndex(CGFloat degrees, NSString *tool) {
+    while (degrees < -180) degrees += 360; while (degrees >= 180) degrees -= 360;
+    CGFloat vertical = fabs(fabs(degrees)-90), horizontal = MIN(fabs(degrees),180-fabs(degrees));
+    if ([tool isEqualToString:@"軸1"]) { if (vertical <= 15) return 2; if (horizontal <= 45) return 1; }
+    else if ([tool isEqualToString:@"軸2"]) { if (vertical <= 30) return 2; if (horizontal <= 30) return 1; }
+    else { if (vertical <= 15) return 1; if (horizontal <= 30) return 2; }
+    return 0;
 }
-static CGPathRef WJAxisSectorPath(CGPoint center, CGFloat radius, CGFloat start, CGFloat end) {
-    CGMutablePathRef path = CGPathCreateMutable(); CGPathMoveToPoint(path, NULL, center.x, center.y);
-    CGPathAddArc(path, NULL, center.x, center.y, radius, start, end, false); CGPathCloseSubpath(path); return path;
+static void WJAddClockArc(CGMutablePathRef path, CGPoint center, CGFloat radius, CGFloat start, CGFloat end) {
+    CGFloat a = start*M_PI/180, b = end*M_PI/180;
+    CGPathMoveToPoint(path,NULL,center.x+radius*cos(a),center.y+radius*sin(a));
+    CGPathAddArc(path,NULL,center.x,center.y,radius,a,b,false);
+}
+static CGPathRef WJAxisClockPath(CGPoint center, CGFloat radius, NSString *tool, NSInteger color) {
+    CGMutablePathRef path = CGPathCreateMutable();
+    if (!isfinite(radius) || radius <= 0) return path;
+    NSInteger run = -180;
+    for (NSInteger degree=-179; degree<=180; degree++) {
+        if (degree == 180 || WJAxisColorIndex(degree+.5,tool) != WJAxisColorIndex(run+.5,tool)) {
+            if (WJAxisColorIndex(run+.5,tool) == color) WJAddClockArc(path,center,radius,run,degree);
+            run = degree;
+        }
+    }
+    for (NSInteger tick=0; tick<12; tick++) {
+        CGFloat degrees = -90 + tick*30;
+        if (WJAxisColorIndex(degrees,tool) != color) continue;
+        CGFloat angle = degrees*M_PI/180, inside = radius*(tick%3 == 0 ? .84 : .915);
+        CGPathMoveToPoint(path,NULL,center.x+radius*cos(angle),center.y+radius*sin(angle));
+        CGPathAddLineToPoint(path,NULL,center.x+inside*cos(angle),center.y+inside*sin(angle));
+    }
+    return path;
+}
+static CGPathRef WJAxisBoundaryPath(CGPoint center, CGFloat radius, NSString *tool, NSInteger color) {
+    CGMutablePathRef path = CGPathCreateMutable();
+    if (!isfinite(radius) || radius <= 0) return path;
+    for (NSInteger degree=-180; degree<180; degree++) {
+        NSInteger before = WJAxisColorIndex(degree-.5,tool), after = WJAxisColorIndex(degree+.5,tool);
+        if (before == after || (before != 0 ? before : after) != color) continue;
+        CGFloat angle = degree*M_PI/180;
+        CGPathMoveToPoint(path,NULL,center.x,center.y);
+        CGPathAddLineToPoint(path,NULL,center.x+radius*cos(angle),center.y+radius*sin(angle));
+    }
+    return path;
+}
+static void WJDrawAxisSectors(CGContextRef ctx, CGPoint center, CGFloat radius, NSString *tool) {
+    CGContextSaveGState(ctx); CGContextSetLineDash(ctx,0,NULL,0); CGContextSetLineCap(ctx,kCGLineCapRound);
+    NSArray<UIColor *> *colors = WJAxisColors();
+    CGFloat dash[] = {4,4};
+    CGContextSetLineDash(ctx,0,dash,2);
+    for (NSInteger color=1; color<colors.count; color++) {
+        CGPathRef boundaries = WJAxisBoundaryPath(center,radius,tool,color);
+        CGContextSetStrokeColorWithColor(ctx,colors[color].CGColor);
+        CGContextAddPath(ctx,boundaries); CGContextStrokePath(ctx); CGPathRelease(boundaries);
+    }
+    CGContextSetLineDash(ctx,0,NULL,0);
+    for (NSInteger color=0; color<colors.count; color++) {
+        CGPathRef path = WJAxisClockPath(center,radius,tool,color);
+        CGContextSetStrokeColorWithColor(ctx,colors[color].CGColor); CGContextAddPath(ctx,path); CGContextStrokePath(ctx); CGPathRelease(path);
+    }
+    CGContextRestoreGState(ctx);
 }
 
 static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
@@ -258,7 +299,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 @end
 
-@interface WaterJumpReceivedPlayerViewController () <UIColorPickerViewControllerDelegate>
+@interface WaterJumpReceivedPlayerViewController () <UIColorPickerViewControllerDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, assign) float wjSelectedSpeed;
 @property (nonatomic, strong) UIView *speedControlContainer;
 @property (nonatomic, weak) UIView *speedControlHost;
@@ -348,6 +389,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         _loopStartTime = kCMTimeInvalid;
         _loopEndTime = kCMTimeInvalid;
         self.player = [AVPlayer playerWithURL:url];
+        [ReceivedVideoManager recordPlayback:url];
         self.videoGravity = AVLayerVideoGravityResizeAspect;
         self.modalPresentationStyle = UIModalPresentationFullScreen;
         self.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
@@ -638,6 +680,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 - (void)prepareForAutoplayReplacement {
+    if (self.drawingModeChangedHandler) self.drawingModeChangedHandler(NO);
+    self.drawingModeChangedHandler = nil;
     [self.player pause];
     self.loopEnabled = NO; self.automaticLoopLimit = 0;
     [self.player.currentItem cancelPendingSeeks];
@@ -661,7 +705,13 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.speedControlHost = host;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(playerTapped:)];
     tap.cancelsTouchesInView = NO;
-    [self.view addGestureRecognizer:tap];
+    tap.delegate = self;
+    host.userInteractionEnabled = YES;
+    UIView *tapSurface = [[UIView alloc] initWithFrame:host.bounds];
+    tapSurface.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    tapSurface.backgroundColor = UIColor.clearColor;
+    [host insertSubview:tapSurface atIndex:0];
+    [tapSurface addGestureRecognizer:tap];
     self.speedControlContainer = [[UIView alloc] init];
     self.speedControlContainer.translatesAutoresizingMaskIntoConstraints = NO;
     self.speedControlContainer.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
@@ -789,6 +839,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.infoButton.heightAnchor constraintEqualToConstant:36]
     ]];
     self.drawingButton = [self featureButtonWithSymbol:@"pencil" action:@selector(toggleDrawingMode:) label:@"描画モード"]; 
+    for (NSLayoutConstraint *constraint in self.drawingButton.constraints) if (constraint.firstAttribute == NSLayoutAttributeWidth || constraint.firstAttribute == NSLayoutAttributeHeight) constraint.constant = 44;
     self.drawingButton.tintColor = UIColor.systemYellowColor;
     self.drawingButton.hidden = YES;
     self.drawingButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -796,7 +847,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [NSLayoutConstraint activateConstraints:@[
         [self.drawingButton.leadingAnchor constraintEqualToAnchor:self.closeButton.trailingAnchor constant:76],
         [self.drawingButton.topAnchor constraintEqualToAnchor:self.closeButton.topAnchor],
-        [self.drawingButton.widthAnchor constraintEqualToConstant:38], [self.drawingButton.heightAnchor constraintEqualToConstant:36]
+        [self.drawingButton.widthAnchor constraintEqualToConstant:44], [self.drawingButton.heightAnchor constraintEqualToConstant:44]
     ]];
     self.drawingCanvas = [[WJDrawingCanvas alloc] initWithFrame:host.bounds];
     self.drawingCanvas.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -1013,6 +1064,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self saveDrawingAnnotations];
 }
 - (void)updateDrawingControlVisibility {
+    self.speedSlider.hidden = self.drawingMode;
+    self.speedValueLabel.hidden = self.drawingMode;
     self.shareButton.hidden = self.drawingMode;
     self.exportButton.hidden = self.drawingMode;
     self.closeButton.hidden = self.drawingMode;
@@ -1106,6 +1159,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)toggleDrawingMode:(id)sender {
     if (self.player.rate > 0) return;
     self.drawingMode = !self.drawingMode;
+    if (self.drawingModeChangedHandler) self.drawingModeChangedHandler(self.drawingMode);
     if (self.drawingMode) {
         self.drawingModeInitialAnnotationCount = self.drawingAnnotations.count;
         self.drawingModeStartTime = self.player.currentTime;
@@ -1114,6 +1168,11 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.drawingCanvas.frame = self.speedControlHost.bounds;
         self.drawingCanvas.userInteractionEnabled = YES;
         [self.speedControlHost bringSubviewToFront:self.drawingCanvas];
+        [self.speedControlHost bringSubviewToFront:self.speedControlContainer];
+        [self.speedControlHost bringSubviewToFront:self.playButton];
+        [self.speedControlHost bringSubviewToFront:self.frameBackButton];
+        [self.speedControlHost bringSubviewToFront:self.frameStepButton];
+        [self.speedControlHost bringSubviewToFront:self.timeLabel];
         [self.speedControlHost bringSubviewToFront:self.drawingPalette];
         [self.speedControlHost bringSubviewToFront:self.drawingTextPalette];
         [self.speedControlHost bringSubviewToFront:self.drawingButton];
@@ -1422,6 +1481,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 
 
+- (void)controlTouchBegan:(id)sender { [self showSpeedControls]; }
 - (UIButton *)featureButtonWithSymbol:(NSString *)symbol action:(SEL)action label:(NSString *)label {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.tintColor = UIColor.whiteColor;
@@ -1430,6 +1490,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     button.layer.cornerRadius = 7;
     [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    [button addTarget:self action:@selector(controlTouchBegan:) forControlEvents:UIControlEventTouchDown];
     [button.widthAnchor constraintEqualToConstant:38].active = YES;
     [button.heightAnchor constraintEqualToConstant:36].active = YES;
     return button;
@@ -1456,6 +1517,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         self.takeoffButton.enabled = NO;
         self.takeoffButton.alpha = .4;
         [self.player replaceCurrentItemWithPlayerItem:item];
+        [ReceivedVideoManager recordPlayback:[(AVURLAsset *)item.asset URL]];
         self.mirroredPlayback = NO;
         self.skeletonVisible = NO;
         self.skeletonOverlayLayer.hidden = YES;
@@ -1524,12 +1586,19 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
 }
 
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    for (UIView *view = touch.view; view && view != self.speedControlHost; view = view.superview) {
+        if ([view isKindOfClass:UIControl.class] || view == self.speedControlContainer || view == self.featureControlContainer || view == self.drawingPalette || view == self.drawingCanvas) return NO;
+    }
+    return YES;
+}
 - (void)playerTapped:(UITapGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateEnded) return;
     // コントロール自体のタップは動画の再生状態を変えず、映像面のタップだけを
     // 再生／一時停止として扱う。
     CGPoint tapPoint = [gesture locationInView:self.view];
     UIView *hitView = [self.view hitTest:tapPoint withEvent:nil];
+    for (UIView *view = hitView; view && view != self.speedControlHost; view = view.superview) { if ([view isKindOfClass:UIControl.class]) return; }
     if (hitView && (self.speedControlContainer && [hitView isDescendantOfView:self.speedControlContainer])) {
         [self showSpeedControls];
         return;
@@ -1627,7 +1696,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
     [self updateDrawingControlVisibility];
     [self.speedHideTimer invalidate];
-    if (self.drawingMode) return;
+    if (self.drawingMode || self.player.rate == 0) return;
     // A点を設定した後は、B点を設定するまで操作列を消さない。
     if (!(CMTIME_IS_VALID(self.loopStartTime) && !CMTIME_IS_VALID(self.loopEndTime))) {
         self.speedHideTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self selector:@selector(hideSpeedControls) userInfo:nil repeats:NO];
@@ -1727,7 +1796,9 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 - (void)closePlayer:(id)sender {
     void (^handler)(void) = self.closeHandler;
     self.closeHandler = nil;
-    [self dismissViewControllerAnimated:YES completion:handler];
+    if (self.parentViewController) {
+        [self prepareForAutoplayReplacement]; [self willMoveToParentViewController:nil]; [self.view removeFromSuperview]; [self removeFromParentViewController]; if (handler) handler();
+    } else [self dismissViewControllerAnimated:YES completion:handler];
 }
 
 - (void)shareCurrentVideo:(id)sender {
@@ -1768,18 +1839,23 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         NSString *style = item[@"style"]; if ([style isEqualToString:@"点線"]) shape.lineDashPattern = @[@4, @4]; else if ([style isEqualToString:@"鎖線"]) shape.lineDashPattern = @[@12, @8];
         CGMutablePathRef path = CGPathCreateMutable(); NSString *tool = item[@"tool"] ?: @"直線"; CGPoint first = points.firstObject.CGPointValue, last = points.lastObject.CGPointValue;
         if ([tool isEqualToString:@"軸1"] || [tool isEqualToString:@"軸2"] || [tool isEqualToString:@"軸3D"]) {
-            CGFloat radius = hypot(last.x-first.x, last.y-first.y);
-            UIColor *yellow = [UIColor.yellowColor colorWithAlphaComponent:.20], *green = [UIColor.systemGreenColor colorWithAlphaComponent:.20], *red = [UIColor.systemRedColor colorWithAlphaComponent:.20];
-            NSArray *sectors = nil;
-            if ([tool isEqualToString:@"軸1"]) sectors = @[@[@(-105), @(-75), green], @[@(75), @(105), green], @[@(-45), @(45), red], @[@(135), @(225), red]];
-            else if ([tool isEqualToString:@"軸2"]) sectors = @[@[@(-120), @(-60), green], @[@(60), @(120), green], @[@(-30), @(30), red], @[@(150), @(210), red]];
-            else sectors = @[@[@(-105), @(-75), red], @[@(75), @(105), red], @[@(-30), @(30), green], @[@(150), @(210), green]];
-            NSArray *base = @[@[@(-180), @(180), yellow]]; sectors = [base arrayByAddingObjectsFromArray:sectors];
-            for (NSArray *sector in sectors) {
-                CGFloat start = [sector[0] doubleValue]*M_PI/180.0, end = [sector[1] doubleValue]*M_PI/180.0;
-                CAShapeLayer *sectorLayer = [CAShapeLayer layer]; sectorLayer.frame = CGRectMake(0,0,size.width,size.height); sectorLayer.fillColor = [sector[2] CGColor]; sectorLayer.strokeColor = UIColor.clearColor.CGColor;
-                sectorLayer.path = WJAxisSectorPath(first, radius, start, end); [overlay addSublayer:sectorLayer]; [self wjAnimateAnnotationLayer:sectorLayer item:item duration:duration];
+            CGFloat radius = hypot(last.x-first.x,last.y-first.y);
+            NSArray<UIColor *> *colors = WJAxisColors();
+            for (NSInteger colorIndex=1; colorIndex<colors.count; colorIndex++) {
+                CAShapeLayer *boundaries = [CAShapeLayer layer]; boundaries.frame = CGRectMake(0,0,size.width,size.height);
+                boundaries.fillColor = UIColor.clearColor.CGColor; boundaries.strokeColor = colors[colorIndex].CGColor;
+                boundaries.lineWidth = width; boundaries.lineCap = kCALineCapRound; boundaries.lineDashPattern = @[@4,@4];
+                CGPathRef boundaryPath = WJAxisBoundaryPath(first,radius,tool,colorIndex); boundaries.path = boundaryPath; CGPathRelease(boundaryPath);
+                [overlay addSublayer:boundaries]; [self wjAnimateAnnotationLayer:boundaries item:item duration:duration];
             }
+            for (NSInteger colorIndex=0; colorIndex<colors.count; colorIndex++) {
+                CAShapeLayer *clock = [CAShapeLayer layer]; clock.frame = CGRectMake(0,0,size.width,size.height);
+                clock.fillColor = UIColor.clearColor.CGColor; clock.strokeColor = colors[colorIndex].CGColor;
+                clock.lineWidth = width; clock.lineCap = kCALineCapRound;
+                CGPathRef clockPath = WJAxisClockPath(first,radius,tool,colorIndex); clock.path = clockPath; CGPathRelease(clockPath);
+                [overlay addSublayer:clock]; [self wjAnimateAnnotationLayer:clock item:item duration:duration];
+            }
+            CGPathRelease(path);
             continue;
         }
         if ([tool isEqualToString:@"丸"]) { CGFloat r = hypot(last.x-first.x,last.y-first.y); CGPathAddEllipseInRect(path, NULL, CGRectMake(first.x-r, first.y-r, r*2, r*2)); shape.fillColor = [color colorWithAlphaComponent:.2].CGColor; }

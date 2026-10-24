@@ -46,7 +46,41 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     [instruction setTransform:t atTime:kCMTimeZero];
 }
 
-@interface WaterJumpComparisonViewController ()
+// All linked times are measured relative to the two positions captured by Link.
+// Never clamp the two anchors independently: only their shared interval is valid.
+typedef struct { double lower; double upper; } WJSyncRange;
+static WJSyncRange WJSharedSyncRange(double mainDuration, double subDuration, double mainAnchor, double subAnchor) {
+    if (!isfinite(mainDuration) || !isfinite(subDuration) || !isfinite(mainAnchor) || !isfinite(subAnchor) || mainDuration <= 0 || subDuration <= 0 || mainAnchor < 0 || subAnchor < 0 || mainAnchor > mainDuration || subAnchor > subDuration) return (WJSyncRange){0, 0};
+    return (WJSyncRange){-MIN(mainAnchor, subAnchor), MIN(mainDuration-mainAnchor, subDuration-subAnchor)};
+}
+@interface WJSyncPositionSlider : UISlider
+@property(nonatomic) double syncFraction;
+@property(nonatomic, strong) UIView *syncMarker;
+@end
+@implementation WJSyncPositionSlider
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) { _syncFraction = NAN; self.tintColor = UIColor.systemBlueColor; }
+    return self;
+}
+- (void)setSyncFraction:(double)value { _syncFraction = value; [self setNeedsLayout]; }
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (!self.syncMarker) {
+        self.syncMarker = [UIView new]; self.syncMarker.backgroundColor = UIColor.systemYellowColor;
+        self.syncMarker.userInteractionEnabled = NO; self.syncMarker.layer.cornerRadius = 1;
+        [self addSubview:self.syncMarker];
+    }
+    self.syncMarker.hidden = !isfinite(self.syncFraction);
+    if (self.syncMarker.hidden) return;
+    CGRect track = [self trackRectForBounds:self.bounds];
+    float value = self.minimumValue + (self.maximumValue-self.minimumValue) * MAX(0, MIN(1, self.syncFraction));
+    CGRect thumb = [self thumbRectForBounds:self.bounds trackRect:track value:value];
+    self.syncMarker.frame = CGRectMake(CGRectGetMidX(thumb)-1.5, CGRectGetMidY(track)-10, 3, 20);
+    [self bringSubviewToFront:self.syncMarker];
+}
+@end
+
+@interface WaterJumpComparisonViewController () <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) NSURL *mainURL;
 @property (nonatomic, strong) NSURL *subURL;
 @property (nonatomic, strong) AVPlayer *mainPlayer;
@@ -56,13 +90,16 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
 @property (nonatomic, strong) CALayer *mainViewport;
 @property (nonatomic, strong) CALayer *subViewport;
 @property (nonatomic) CGSize comparisonAspects;
-@property (nonatomic, strong) UISlider *positionSlider;
-@property (nonatomic, strong) UISlider *mainPositionSlider;
-@property (nonatomic, strong) UISlider *subPositionSlider;
+@property (nonatomic, strong) WJSyncPositionSlider *positionSlider;
+@property (nonatomic, strong) WJSyncPositionSlider *mainPositionSlider;
+@property (nonatomic, strong) WJSyncPositionSlider *subPositionSlider;
 @property (nonatomic, strong) UISlider *speedSlider;
 @property (nonatomic, strong) UILabel *speedValueLabel;
 @property (nonatomic, strong) UIButton *playButton;
 @property (nonatomic, strong) UILabel *mainLabel;
+@property (nonatomic, strong) UILabel *mainTimeLabel;
+@property (nonatomic, strong) UILabel *subTimeLabel;
+@property (nonatomic, strong) id subTimeObserver;
 @property (nonatomic, strong) UILabel *subLabel;
 @property (nonatomic, assign) float speed;
 @property (nonatomic, strong) id observer;
@@ -106,22 +143,37 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
 @property (nonatomic, assign) NSInteger automaticLoopLimit;
 @property (nonatomic, assign) NSInteger automaticLoopCount;
 @property (nonatomic, strong) NSDate *automaticLoopDeadline;
+@property(nonatomic, strong) UISlider *unlinkedPositionSlider;
+@property(nonatomic) BOOL resumeAfterUnlinkedSeek;
+@property(nonatomic) NSUInteger unlinkedSeekGeneration;
+@property(nonatomic) NSUInteger pairedSeekGeneration;
+@property(nonatomic) BOOL pairedSeekInProgress;
+@property(nonatomic) BOOL pairedWantsPlayback;
+@property(nonatomic) CMTime pairedMainTarget;
+@property(nonatomic) CMTime pairedSubTarget;
+@property(nonatomic) CMTime requestedMainTime;
+@property(nonatomic) CMTime requestedSubTime;
 @end
 
 @implementation WaterJumpComparisonViewController
 
 - (instancetype)initWithMainURL:(NSURL *)mainURL subURL:(NSURL *)subURL {
-    if ((self = [super init])) { _mainURL = mainURL; _subURL = subURL; _speed = 1.0; self.modalPresentationStyle = UIModalPresentationFullScreen; }
+    if ((self = [super init])) { _mainURL = mainURL; _subURL = subURL; [ReceivedVideoManager recordPlayback:subURL]; [ReceivedVideoManager recordPlayback:mainURL]; _speed = 1.0; _requestedMainTime = kCMTimeInvalid; _requestedSubTime = kCMTimeInvalid; self.modalPresentationStyle = UIModalPresentationFullScreen; }
     return self;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
+    UITapGestureRecognizer *controlsTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(togglePlayback)];
+    controlsTap.delegate = self; controlsTap.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:controlsTap];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshFavorites) name:UIApplicationDidBecomeActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshFavorites) name:@"WJVideoFavoritesChanged" object:nil];
     self.mainPlayer = [AVPlayer playerWithURL:self.mainURL];
     self.subPlayer = [AVPlayer playerWithURL:self.subURL];
+    self.mainPlayer.automaticallyWaitsToMinimizeStalling = NO;
+    self.subPlayer.automaticallyWaitsToMinimizeStalling = NO;
     self.mainZoomScale = 1.0; self.subZoomScale = 1.0;
     self.mainLayer = [AVPlayerLayer playerLayerWithPlayer:self.mainPlayer];
     self.subLayer = [AVPlayerLayer playerLayerWithPlayer:self.subPlayer];
@@ -137,11 +189,26 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     [self.mainViewport addSublayer:self.mainLayer]; [self.subViewport addSublayer:self.subLayer];
     [self refreshComparisonAspects];
     self.mainLabel = [self label:@"MAIN"]; self.subLabel = [self label:@"SUB"];
+    self.mainLabel.text = [self receivedTitle:@"MAIN" videoURL:self.mainURL];
+    self.subLabel.text = [self receivedTitle:@"SUB" videoURL:self.subURL];
+    self.mainLabel.adjustsFontSizeToFitWidth = YES; self.subLabel.adjustsFontSizeToFitWidth = YES;
+    self.mainLabel.minimumScaleFactor = .65; self.subLabel.minimumScaleFactor = .65;
     [self.view addSubview:self.mainLabel]; [self.view addSubview:self.subLabel];
-    self.positionSlider = [UISlider new]; self.positionSlider.minimumValue = 0; self.positionSlider.maximumValue = 1;
+    self.mainTimeLabel = [self playbackCounterLabel]; self.subTimeLabel = [self playbackCounterLabel];
+    self.mainTimeLabel.accessibilityLabel = @"MAIN 再生時間"; self.subTimeLabel.accessibilityLabel = @"SUB 再生時間";
+    [self.view addSubview:self.mainTimeLabel]; [self.view addSubview:self.subTimeLabel];
+    self.unlinkedPositionSlider = [UISlider new]; self.unlinkedPositionSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    self.unlinkedPositionSlider.minimumTrackTintColor = UIColor.systemGreenColor;
+    self.unlinkedPositionSlider.thumbTintColor = UIColor.systemGreenColor;
+    self.unlinkedPositionSlider.accessibilityLabel = @"同期設定前の2画面共通再生位置";
+    [self.unlinkedPositionSlider addTarget:self action:@selector(unlinkedSeekBegan:) forControlEvents:UIControlEventTouchDown];
+    [self.unlinkedPositionSlider addTarget:self action:@selector(unlinkedSeekChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.unlinkedPositionSlider addTarget:self action:@selector(unlinkedSeekEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    [self.view addSubview:self.unlinkedPositionSlider];
+    self.positionSlider = [WJSyncPositionSlider new]; self.positionSlider.minimumValue = 0; self.positionSlider.maximumValue = 1;
     [self.positionSlider addTarget:self action:@selector(positionChanged:) forControlEvents:UIControlEventValueChanged];
-    self.mainPositionSlider = [UISlider new]; self.mainPositionSlider.minimumValue = 0; self.mainPositionSlider.maximumValue = 1; [self.mainPositionSlider addTarget:self action:@selector(individualPositionChanged:) forControlEvents:UIControlEventValueChanged];
-    self.subPositionSlider = [UISlider new]; self.subPositionSlider.minimumValue = 0; self.subPositionSlider.maximumValue = 1; [self.subPositionSlider addTarget:self action:@selector(individualPositionChanged:) forControlEvents:UIControlEventValueChanged];
+    self.mainPositionSlider = [WJSyncPositionSlider new]; self.mainPositionSlider.minimumValue = 0; self.mainPositionSlider.maximumValue = 1; [self.mainPositionSlider addTarget:self action:@selector(individualPositionChanged:) forControlEvents:UIControlEventValueChanged];
+    self.subPositionSlider = [WJSyncPositionSlider new]; self.subPositionSlider.minimumValue = 0; self.subPositionSlider.maximumValue = 1; [self.subPositionSlider addTarget:self action:@selector(individualPositionChanged:) forControlEvents:UIControlEventValueChanged];
     self.speedSlider = [UISlider new]; self.speedSlider.minimumValue = .2; self.speedSlider.maximumValue = 1.0; self.speedSlider.value = 1.0;
     // 通常の再生画面と同じ、控えめな速度調整用カラーに統一する。
     self.speedSlider.minimumTrackTintColor = [UIColor colorWithWhite:0.82 alpha:0.75];
@@ -184,7 +251,7 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     self.mainMirrorButton = [self featureButton:@"M1" action:@selector(toggleMainMirror:)];
     self.subMirrorButton = [self featureButton:@"M2" action:@selector(toggleSubMirror:)];
     for (UIView *view in @[self.positionSlider, self.mainPositionSlider, self.subPositionSlider, self.speedSlider, self.speedValueLabel, self.playButton, close, self.shareButton, self.exportButton, self.favoriteButton, self.selectVideoButton, self.linkButton, self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton, self.syncPointButton, self.syncBackButton, self.syncForwardButton, layoutButton, self.aButton, self.bButton, self.loopButton, self.mainMirrorButton, self.subMirrorButton]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
-    self.sharedFeatureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aButton, self.bButton, self.loopButton, self.syncPointButton, self.selectVideoButton]];
+    self.sharedFeatureStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.aButton, self.bButton, self.loopButton, self.syncPointButton]];
     self.sharedFeatureStack.translatesAutoresizingMaskIntoConstraints = NO;
     self.sharedFeatureStack.axis = UILayoutConstraintAxisHorizontal;
     self.sharedFeatureStack.alignment = UIStackViewAlignmentCenter;
@@ -192,6 +259,7 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     self.sharedFeatureStack.spacing = 6.0;
     [self.view addSubview:self.sharedFeatureStack];
     self.frameButton.hidden = YES;
+    [NSLayoutConstraint activateConstraints:@[[self.unlinkedPositionSlider.leadingAnchor constraintEqualToAnchor:self.positionSlider.leadingAnchor], [self.unlinkedPositionSlider.trailingAnchor constraintEqualToAnchor:self.positionSlider.trailingAnchor], [self.unlinkedPositionSlider.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor]]];
     self.positionSlider.accessibilityLabel = @"比較再生位置"; self.speedSlider.accessibilityLabel = @"比較再生速度";
     self.bottomControlGuide = [UILayoutGuide new];
     [self.view addLayoutGuide:self.bottomControlGuide];
@@ -201,7 +269,7 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
         [self.speedValueLabel.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [self.speedValueLabel.centerYAnchor constraintEqualToAnchor:self.speedSlider.centerYAnchor], [self.speedValueLabel.widthAnchor constraintEqualToConstant:48],
         [self.playButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:10], [self.playButton.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor], [self.playButton.widthAnchor constraintEqualToConstant:38], [self.playButton.heightAnchor constraintEqualToConstant:36],
         [self.syncBackButton.leadingAnchor constraintEqualToAnchor:self.playButton.trailingAnchor constant:4], [self.syncBackButton.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor], [self.syncBackButton.widthAnchor constraintEqualToConstant:36], [self.syncBackButton.heightAnchor constraintEqualToConstant:36],
-        [self.sharedFeatureStack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12], [self.sharedFeatureStack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [self.sharedFeatureStack.centerYAnchor constraintEqualToAnchor:self.speedSlider.topAnchor constant:-45], [self.sharedFeatureStack.heightAnchor constraintEqualToConstant:36],
+        [self.selectVideoButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [self.selectVideoButton.centerYAnchor constraintEqualToAnchor:self.sharedFeatureStack.centerYAnchor], [self.sharedFeatureStack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12], [self.sharedFeatureStack.trailingAnchor constraintEqualToAnchor:self.selectVideoButton.leadingAnchor constant:-12], [self.sharedFeatureStack.centerYAnchor constraintEqualToAnchor:self.speedSlider.topAnchor constant:-45], [self.sharedFeatureStack.heightAnchor constraintEqualToConstant:36],
         [self.syncForwardButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [self.syncForwardButton.centerYAnchor constraintEqualToAnchor:self.positionSlider.centerYAnchor], [self.syncForwardButton.widthAnchor constraintEqualToConstant:36], [self.syncForwardButton.heightAnchor constraintEqualToConstant:36],
         [close.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12], [close.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4], [close.widthAnchor constraintEqualToConstant:44], [close.heightAnchor constraintEqualToConstant:44],
         [self.favoriteButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12], [self.favoriteButton.topAnchor constraintEqualToAnchor:close.topAnchor], [self.favoriteButton.widthAnchor constraintEqualToConstant:44], [self.favoriteButton.heightAnchor constraintEqualToConstant:44],
@@ -219,9 +287,40 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     for (UIView *view in @[self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton]) view.translatesAutoresizingMaskIntoConstraints = YES;
     __weak typeof(self) weakSelf = self;
     self.observer = [self.mainPlayer addPeriodicTimeObserverForInterval:CMTimeMake(1, 10) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) { [weakSelf updatePosition]; }];
+    self.subTimeObserver = [self.subPlayer addPeriodicTimeObserverForInterval:CMTimeMake(1, 10) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) { [weakSelf updatePlaybackCounters]; }];
     self.loopStart = kCMTimeInvalid; self.loopEnd = kCMTimeInvalid; self.subLoopStart = kCMTimeInvalid; self.subLoopEnd = kCMTimeInvalid; self.linkedMainAnchor = kCMTimeInvalid; self.linkedSubAnchor = kCMTimeInvalid; self.linkedPlayback = NO; self.sideBySide = YES; [self refreshComparisonFeatureButtons]; [self updateLinkControls];
 }
 
+- (NSString *)receivedTitle:(NSString *)title videoURL:(NSURL *)url {
+    if (!self.showsReceivedCameraNames) return title;
+    NSData *data = [NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]];
+    id info = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    id value = [info isKindOfClass:NSDictionary.class] ? info[@"cameraName"] : nil;
+    NSString *name = [value isKindOfClass:NSString.class] ? [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] : nil;
+    return name.length ? [NSString stringWithFormat:@"%@ %@", title, name] : title;
+}
+- (UILabel *)playbackCounterLabel {
+    UILabel *label = [self label:@"00:00.00/00:00.00"];
+    label.translatesAutoresizingMaskIntoConstraints = YES;
+    label.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+    label.textAlignment = NSTextAlignmentCenter; label.adjustsFontSizeToFitWidth = YES; label.minimumScaleFactor = .65;
+    label.userInteractionEnabled = NO;
+    return label;
+}
+- (NSString *)formattedCounterTime:(double)seconds {
+    if (!isfinite(seconds) || seconds < 0) seconds = 0;
+    NSInteger minutes = (NSInteger)(seconds / 60.0);
+    return [NSString stringWithFormat:@"%02ld:%05.2f", (long)minutes, seconds-minutes*60.0];
+}
+- (void)updatePlaybackCounters {
+    NSArray<AVPlayer *> *players = @[self.mainPlayer,self.subPlayer];
+    NSArray<UILabel *> *labels = @[self.mainTimeLabel,self.subTimeLabel];
+    for (NSUInteger i=0; i<players.count; i++) {
+        double duration = CMTimeGetSeconds(players[i].currentItem.duration);
+        double current = CMTimeGetSeconds(players[i].currentTime);
+        labels[i].text = [NSString stringWithFormat:@"%@/%@", [self formattedCounterTime:current], [self formattedCounterTime:duration]];
+    }
+}
 - (UILabel *)label:(NSString *)text { UILabel *label = [UILabel new]; label.text = text; label.textColor = UIColor.whiteColor; label.backgroundColor = [UIColor colorWithWhite:0 alpha:.45]; label.translatesAutoresizingMaskIntoConstraints = NO; return label; }
 - (UIButton *)featureButton:(NSString *)title action:(SEL)action { UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem]; NSDictionary *symbols = @{@"A": @"a.circle", @"B": @"b.circle", @"↻": @"repeat", @"▸|": @"forward.frame", @"M1": @"arrow.left.and.right.righttriangle.left.righttriangle.right", @"M2": @"arrow.left.and.right.righttriangle.left.righttriangle.right"}; NSString *symbol = symbols[title]; if (symbol) { [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal]; button.accessibilityLabel = title; } else { [button setTitle:title forState:UIControlStateNormal]; button.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; } button.tintColor = UIColor.whiteColor; button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25]; button.layer.cornerRadius = 7; [button.widthAnchor constraintEqualToConstant:38].active = YES; [button.heightAnchor constraintEqualToConstant:36].active = YES; [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside]; return button; }
 - (void)refreshComparisonFeatureButtons {
@@ -236,7 +335,7 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
 }
 - (void)updateIndividualTransportButtons { [self.mainPlayButton setImage:[UIImage systemImageNamed:(self.mainPlayer.rate > 0 ? @"pause.fill" : @"play.fill")] forState:UIControlStateNormal]; [self.subPlayButton setImage:[UIImage systemImageNamed:(self.subPlayer.rate > 0 ? @"pause.fill" : @"play.fill")] forState:UIControlStateNormal]; }
 - (UIButton *)transportButton:(NSString *)symbol action:(SEL)action tag:(NSInteger)tag { UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem]; [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal]; button.tintColor = UIColor.whiteColor; button.backgroundColor = [UIColor colorWithWhite:0 alpha:.45]; button.layer.cornerRadius = 6; button.tag = tag; [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside]; return button; }
-- (void)updateLinkControls { for (UIView *view in @[self.positionSlider, self.speedSlider, self.speedValueLabel, self.playButton, self.syncBackButton, self.syncForwardButton, self.sharedFeatureStack]) view.hidden = !self.linkedPlayback; self.mainPositionSlider.hidden = self.linkedPlayback; self.subPositionSlider.hidden = self.linkedPlayback; for (UIView *view in @[self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton, self.mainMirrorButton, self.subMirrorButton]) view.hidden = self.linkedPlayback; self.syncPointButton.enabled = self.linkedPlayback; self.syncPointButton.alpha = self.linkedPlayback ? 1.0 : .35; self.linkButton.tintColor = [UIColor.systemGreenColor colorWithAlphaComponent:self.linkedPlayback ? 1.0 : .3]; [self.linkButton setImage:[UIImage systemImageNamed:@"link"] forState:UIControlStateNormal]; self.linkButton.accessibilityValue = self.linkedPlayback ? @"選択中：2画面を連動" : @"未選択：個別操作"; }
+- (void)updateLinkControls { self.unlinkedPositionSlider.hidden = self.linkedPlayback; for (UIView *view in @[self.positionSlider, self.speedSlider, self.speedValueLabel, self.playButton, self.syncBackButton, self.syncForwardButton, self.sharedFeatureStack]) view.hidden = !self.linkedPlayback; self.mainPositionSlider.hidden = self.linkedPlayback; self.subPositionSlider.hidden = self.linkedPlayback; self.mainTimeLabel.hidden = self.linkedPlayback; self.subTimeLabel.hidden = self.linkedPlayback; for (UIView *view in @[self.mainBackButton, self.mainPlayButton, self.mainForwardButton, self.subBackButton, self.subPlayButton, self.subForwardButton, self.mainMirrorButton, self.subMirrorButton]) view.hidden = self.linkedPlayback; self.selectVideoButton.hidden = NO; [self updateSyncMarkers]; self.syncPointButton.enabled = self.linkedPlayback; self.syncPointButton.alpha = self.linkedPlayback ? 1.0 : .35; self.linkButton.tintColor = [UIColor.systemGreenColor colorWithAlphaComponent:self.linkedPlayback ? 1.0 : .3]; [self.linkButton setImage:[UIImage systemImageNamed:@"link"] forState:UIControlStateNormal]; self.linkButton.accessibilityValue = self.linkedPlayback ? @"選択中：2画面を連動" : @"未選択：個別操作"; }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAllButUpsideDown; }
 - (BOOL)shouldAutorotate { return YES; }
 - (void)viewDidAppear:(BOOL)animated {
@@ -276,40 +375,234 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     [self layoutPlayerLayer:self.mainLayer inViewport:self.mainViewport rect:mainRect zoom:self.mainZoomScale mirrored:self.mainMirrored];
     [self layoutPlayerLayer:self.subLayer inViewport:self.subViewport rect:subRect zoom:self.subZoomScale mirrored:self.subMirrored];
     [CATransaction commit];
- [self.mainLabel sizeToFit]; [self.subLabel sizeToFit]; CGFloat labelX = 12.0; self.mainLabel.frame = CGRectMake(mainRect.origin.x + labelX, mainRect.origin.y + 8.0, self.mainLabel.bounds.size.width, self.mainLabel.bounds.size.height); self.subLabel.frame = CGRectMake(subRect.origin.x + labelX, subRect.origin.y + 8.0, self.subLabel.bounds.size.width, self.subLabel.bounds.size.height); self.linkButton.frame = CGRectMake((self.sideBySide ? boundaryX : self.view.bounds.size.width / 2.0) - 24.0, boundaryY - 24.0, 48.0, 48.0); CGFloat sliderHeight = 32.0, sliderYMain = CGRectGetMaxY(mainRect) - sliderHeight - 42.0, sliderYSub = CGRectGetMaxY(subRect) - sliderHeight - 42.0; self.mainPositionSlider.frame = CGRectMake(mainRect.origin.x + 24, sliderYMain, MAX(1, mainRect.size.width - 48), sliderHeight); self.subPositionSlider.frame = CGRectMake(subRect.origin.x + 24, sliderYSub, MAX(1, subRect.size.width - 48), sliderHeight); [self layoutTransportButton:self.mainBackButton play:self.mainPlayButton forward:self.mainForwardButton inRect:mainRect sliderY:sliderYMain]; [self layoutTransportButton:self.subBackButton play:self.subPlayButton forward:self.subForwardButton inRect:subRect sliderY:sliderYSub]; CGFloat mirrorSize = 36.0; self.mainMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.mainForwardButton.frame) + 6.0, self.mainForwardButton.frame.origin.y, mirrorSize, mirrorSize); self.subMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.subForwardButton.frame) + 6.0, self.subForwardButton.frame.origin.y, mirrorSize, mirrorSize); [self.view bringSubviewToFront:self.linkButton]; [self.view bringSubviewToFront:self.syncBackButton]; [self.view bringSubviewToFront:self.playButton]; [self.view bringSubviewToFront:self.syncForwardButton]; [self.view bringSubviewToFront:self.mainMirrorButton]; [self.view bringSubviewToFront:self.subMirrorButton]; [self.view bringSubviewToFront:self.mainPositionSlider]; [self.view bringSubviewToFront:self.subPositionSlider]; }
+ [self.mainLabel sizeToFit]; [self.subLabel sizeToFit]; CGFloat labelX = 12.0; self.mainLabel.frame = CGRectMake(mainRect.origin.x + labelX, mainRect.origin.y + 8.0, MIN(self.mainLabel.bounds.size.width,MAX(1,mainRect.size.width-24)), self.mainLabel.bounds.size.height); self.subLabel.frame = CGRectMake(subRect.origin.x + labelX, subRect.origin.y + 8.0, MIN(self.subLabel.bounds.size.width,MAX(1,subRect.size.width-24)), self.subLabel.bounds.size.height); self.linkButton.frame = CGRectMake((self.sideBySide ? boundaryX : self.view.bounds.size.width / 2.0) - 24.0, boundaryY - 24.0, 48.0, 48.0); CGFloat sliderHeight = 32.0, sliderYMain = CGRectGetMaxY(mainRect) - sliderHeight - 42.0, sliderYSub = CGRectGetMaxY(subRect) - sliderHeight - 42.0; self.mainPositionSlider.frame = CGRectMake(mainRect.origin.x + 24, sliderYMain, MAX(1, mainRect.size.width - 48), sliderHeight); self.subPositionSlider.frame = CGRectMake(subRect.origin.x + 24, sliderYSub, MAX(1, subRect.size.width - 48), sliderHeight); self.mainTimeLabel.frame = CGRectMake(CGRectGetMinX(self.mainPositionSlider.frame), CGRectGetMaxY(self.mainPositionSlider.frame)+2, CGRectGetWidth(self.mainPositionSlider.frame), 22);
+    self.subTimeLabel.frame = CGRectMake(CGRectGetMinX(self.subPositionSlider.frame), CGRectGetMaxY(self.subPositionSlider.frame)+2, CGRectGetWidth(self.subPositionSlider.frame), 22);
+    [self layoutTransportButton:self.mainBackButton play:self.mainPlayButton forward:self.mainForwardButton inRect:mainRect sliderY:sliderYMain]; [self layoutTransportButton:self.subBackButton play:self.subPlayButton forward:self.subForwardButton inRect:subRect sliderY:sliderYSub]; CGFloat mirrorSize = 36.0; self.mainMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.mainForwardButton.frame) + 6.0, self.mainForwardButton.frame.origin.y, mirrorSize, mirrorSize); self.subMirrorButton.frame = CGRectMake(CGRectGetMaxX(self.subForwardButton.frame) + 6.0, self.subForwardButton.frame.origin.y, mirrorSize, mirrorSize); [self.view bringSubviewToFront:self.linkButton]; [self.view bringSubviewToFront:self.syncBackButton]; [self.view bringSubviewToFront:self.playButton]; [self.view bringSubviewToFront:self.syncForwardButton]; [self.view bringSubviewToFront:self.mainMirrorButton]; [self.view bringSubviewToFront:self.subMirrorButton]; [self.view bringSubviewToFront:self.mainPositionSlider]; [self.view bringSubviewToFront:self.subPositionSlider]; [self updateSyncMarkers]; }
 - (void)layoutTransportButton:(UIButton *)back play:(UIButton *)play forward:(UIButton *)forward inRect:(CGRect)rect sliderY:(CGFloat)sliderY { CGFloat size = 36.0, gap = 6.0, total = size * 4 + gap * 3; CGFloat x = CGRectGetMidX(rect) - total / 2.0; CGFloat y = sliderY - size - 4.0; back.frame = CGRectMake(x, y, size, size); play.frame = CGRectMake(x + size + gap, y, size, size); forward.frame = CGRectMake(x + (size + gap) * 2, y, size, size); }
-- (void)togglePlay:(id)sender { BOOL playing = self.mainPlayer.rate > 0 || self.subPlayer.rate > 0; if (playing) { [self.mainPlayer pause]; [self.subPlayer pause]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; } else { self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal]; } [self updateIndividualTransportButtons]; }
-- (void)startPlayback {
-    // 両方のサイドカーに記録された撮影開始時刻を使い、共通の実時刻が
-    // 先頭になるよう初期位置を合わせる。メタデータがない旧動画は従来通り0秒。
-    NSDictionary *(^metadata)(NSURL *) = ^NSDictionary *(NSURL *url) {
-        NSData *data = [NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]];
-        id object = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        return [object isKindOfClass:NSDictionary.class] ? object : @{};
-    };
-    double mainStart = [metadata(self.mainURL)[@"recordingStart"] doubleValue];
-    double subStart = [metadata(self.subURL)[@"recordingStart"] doubleValue];
-    if (mainStart > 0 && subStart > 0 && fabs(mainStart - subStart) < 120.0) {
-        double common = MAX(mainStart, subStart);
-        [self.mainPlayer seekToTime:CMTimeMakeWithSeconds(MAX(0, common - mainStart), 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
-        [self.subPlayer seekToTime:CMTimeMakeWithSeconds(MAX(0, common - subStart), 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil];
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture shouldReceiveTouch:(UITouch *)touch {
+    if (![gesture isKindOfClass:UITapGestureRecognizer.class]) return YES;
+    for (UIView *view = touch.view; view && view != self.view; view = view.superview) {
+        if ([view isKindOfClass:UIControl.class] || [view isKindOfClass:UIScrollView.class]) return NO;
     }
-    [self configureAutomaticLoop]; [self togglePlay:nil];
+    return [touch locationInView:self.view].y >= CGRectGetMaxY(UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets))-112;
 }
-- (void)positionChanged:(UISlider *)slider { [self.mainPlayer pause]; [self.subPlayer pause]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; if (self.linkedPlayback && self.hasLinkedAnchors) { double duration = [self linkedDurationSeconds]; if (duration > 0) [self seekLinkedElapsed:duration * slider.value]; return; } double duration = CMTimeGetSeconds(self.mainPlayer.currentItem.duration); if (!isfinite(duration) || duration <= 0) return; CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600); [self.mainPlayer seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; }
-- (void)individualPositionChanged:(UISlider *)slider { [self.mainPlayer pause]; [self.subPlayer pause]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; AVPlayer *player = slider == self.mainPositionSlider ? self.mainPlayer : self.subPlayer; double duration = CMTimeGetSeconds(player.currentItem.duration); if (!isfinite(duration) || duration <= 0) return; CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600); [player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; }
-- (void)toggleLink:(id)sender { if (!self.linkedPlayback) { self.linkedMainAnchor = self.mainPlayer.currentTime; self.linkedSubAnchor = self.subPlayer.currentTime; self.hasLinkedAnchors = CMTIME_IS_VALID(self.linkedMainAnchor) && CMTIME_IS_VALID(self.linkedSubAnchor); } self.linkedPlayback = !self.linkedPlayback; [self updateLinkControls]; [self.view setNeedsLayout]; }
+- (void)togglePlayback {
+    double duration = CMTimeGetSeconds(self.mainPlayer.currentItem.duration), current = CMTimeGetSeconds(self.mainPlayer.currentTime);
+    if (!self.linkedPlayback && !self.pairedSeekInProgress && self.mainPlayer.rate == 0 && self.subPlayer.rate == 0 && isfinite(duration) && duration > 0 && isfinite(current) && current >= duration-.05) {
+        [self seekPairMain:kCMTimeZero sub:kCMTimeZero play:YES];
+        return;
+    }
+    [self togglePlay:nil];
+}
+- (void)togglePlay:(id)sender {
+    BOOL playing = self.mainPlayer.rate > 0 || self.subPlayer.rate > 0 || (self.pairedSeekInProgress && self.pairedWantsPlayback);
+    if (playing) { [self pausePlayback]; }
+    else if (self.linkedPlayback && self.hasLinkedAnchors) {
+        WJSyncRange range = [self sharedSyncRange];
+        double relative = self.pairedSeekInProgress ? CMTimeGetSeconds(self.pairedMainTarget)-CMTimeGetSeconds(self.linkedMainAnchor) : CMTimeGetSeconds(self.mainPlayer.currentTime)-CMTimeGetSeconds(self.linkedMainAnchor);
+        if (relative >= range.upper-.01) relative = range.lower;
+        [self seekLinkedRelative:relative play:YES];
+    } else { self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; }
+    [self.playButton setImage:[UIImage systemImageNamed:playing ? @"play.fill" : @"pause.fill"] forState:UIControlStateNormal];
+    [self updateIndividualTransportButtons];
+}
+
+- (void)startPlayback {
+    NSTimeInterval mainStart = [ReceivedVideoManager recordingStartTime:self.mainURL];
+    NSTimeInterval subStart = [ReceivedVideoManager recordingStartTime:self.subURL];
+    double mainSeconds = 0, subSeconds = 0;
+    if (isfinite(mainStart) && isfinite(subStart) && mainStart > 0 && subStart > 0) {
+        double common = MAX(mainStart,subStart);
+        double mainOffset = common-mainStart, subOffset = common-subStart;
+        double mainDuration = CMTimeGetSeconds(self.mainPlayer.currentItem.asset.duration), subDuration = CMTimeGetSeconds(self.subPlayer.currentItem.asset.duration);
+        if (isfinite(mainDuration) && isfinite(subDuration) && mainOffset < mainDuration && subOffset < subDuration) { mainSeconds = mainOffset; subSeconds = subOffset; }
+    }
+    CMTime mainTime = CMTimeMakeWithSeconds(mainSeconds,1000000), subTime = CMTimeMakeWithSeconds(subSeconds,1000000);
+    [self configureAutomaticLoop]; [self seekPairMain:mainTime sub:subTime play:YES];
+}
+- (void)unlinkedSeekBegan:(UISlider *)slider { self.pairedSeekGeneration += 1; self.pairedSeekInProgress = NO; self.pairedWantsPlayback = NO; self.unlinkedSeekGeneration += 1; self.resumeAfterUnlinkedSeek = YES; [self.mainPlayer pause]; [self.subPlayer pause]; }
+- (void)unlinkedSeekChanged:(UISlider *)slider {
+    if (self.linkedPlayback) return;
+    double duration = MIN(CMTimeGetSeconds(self.mainPlayer.currentItem.duration), CMTimeGetSeconds(self.subPlayer.currentItem.duration));
+    if (!isfinite(duration) || duration <= 0) return;
+    CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600);
+    [self.mainPlayer seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+    [self.subPlayer seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+    [self updateIndividualTransportButtons];
+}
+- (void)unlinkedSeekEnded:(UISlider *)slider {
+    double duration = MIN(CMTimeGetSeconds(self.mainPlayer.currentItem.duration), CMTimeGetSeconds(self.subPlayer.currentItem.duration));
+    if (self.linkedPlayback || !isfinite(duration) || duration <= 0) return;
+    BOOL resume = self.resumeAfterUnlinkedSeek; self.resumeAfterUnlinkedSeek = NO;
+    NSUInteger generation = self.unlinkedSeekGeneration;
+    CMTime time = CMTimeMakeWithSeconds(duration * slider.value, 600);
+    dispatch_group_t seeks = dispatch_group_create(); __block BOOL finishedAll = YES;
+    for (AVPlayer *player in @[self.mainPlayer, self.subPlayer]) {
+        dispatch_group_enter(seeks);
+        [player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+            dispatch_async(dispatch_get_main_queue(), ^{ finishedAll = finishedAll && finished; dispatch_group_leave(seeks); });
+        }];
+    }
+    dispatch_group_notify(seeks, dispatch_get_main_queue(), ^{
+        if (resume && finishedAll && generation == self.unlinkedSeekGeneration && !self.linkedPlayback && self.view.window) { self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; }
+        [self updateIndividualTransportButtons];
+    });
+}
+- (void)positionChanged:(UISlider *)slider {
+    [self pausePlayback];
+    if (self.linkedPlayback && self.hasLinkedAnchors) [self seekLinkedElapsed:[self linkedDurationSeconds] * slider.value];
+}
+
+- (void)individualPositionChanged:(UISlider *)slider {
+    [self pausePlayback];
+    AVPlayer *player = slider == self.mainPositionSlider ? self.mainPlayer : self.subPlayer;
+    double duration = CMTimeGetSeconds(player.currentItem.duration);
+    if (isfinite(duration) && duration > 0) [self seekIndividualPlayer:player time:CMTimeMakeWithSeconds(duration * slider.value, 600)];
+}
+
+- (void)toggleLink:(id)sender {
+    self.unlinkedSeekGeneration += 1; self.resumeAfterUnlinkedSeek = NO;
+    if (!self.linkedPlayback) {
+        BOOL playing = self.mainPlayer.rate > 0 || self.subPlayer.rate > 0;
+        [self.mainPlayer pause]; [self.subPlayer pause];
+        self.linkedMainAnchor = CMTIME_IS_NUMERIC(self.requestedMainTime) ? self.requestedMainTime : self.mainPlayer.currentTime;
+        self.linkedSubAnchor = CMTIME_IS_NUMERIC(self.requestedSubTime) ? self.requestedSubTime : self.subPlayer.currentTime;
+        self.hasLinkedAnchors = CMTIME_IS_NUMERIC(self.linkedMainAnchor) && CMTIME_IS_NUMERIC(self.linkedSubAnchor);
+        self.linkedPlayback = self.hasLinkedAnchors;
+        self.requestedMainTime = kCMTimeInvalid; self.requestedSubTime = kCMTimeInvalid;
+        if (self.linkedPlayback) [self seekLinkedRelative:0 play:playing];
+    } else {
+        self.linkedPlayback = NO; self.pairedWantsPlayback = NO;
+        self.pairedSeekGeneration += 1; self.pairedSeekInProgress = NO;
+    }
+    [self updateLinkControls]; [self updatePosition]; [self.view setNeedsLayout];
+}
+
 - (void)toggleLayout:(id)sender { self.sideBySide = !self.sideBySide; [self.view setNeedsLayout]; }
-- (void)speedChanged:(UISlider *)slider { self.speed = roundf(slider.value * 100) / 100; self.speedValueLabel.text = [NSString stringWithFormat:@"%.2f×", self.speed]; BOOL playing = self.mainPlayer.rate > 0; self.mainPlayer.rate = playing ? self.speed : 0; self.subPlayer.rate = playing ? self.speed : 0; }
-- (void)updatePosition { [self updateIndividualTransportButtons]; double duration = CMTimeGetSeconds(self.mainPlayer.currentItem.duration); double current = CMTimeGetSeconds(self.mainPlayer.currentTime); double subDuration = CMTimeGetSeconds(self.subPlayer.currentItem.duration); double subCurrent = CMTimeGetSeconds(self.subPlayer.currentTime); if (self.linkedPlayback && self.hasLinkedAnchors) { double linkedDuration = [self linkedDurationSeconds]; double linkedStart = MAX(0, CMTimeGetSeconds(self.linkedMainAnchor) - 2.0); double elapsed = MAX(0, CMTimeGetSeconds(self.mainPlayer.currentTime) - linkedStart); if (linkedDuration > 0) self.positionSlider.value = MIN(1, elapsed / linkedDuration); if (self.mainPlayer.rate > 0 && linkedDuration > 0 && elapsed >= linkedDuration - .05) { [self.mainPlayer pause]; [self.subPlayer pause]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; [self updateIndividualTransportButtons]; } } else if (isfinite(duration) && duration > 0 && isfinite(current)) { self.positionSlider.value = current / duration; } if (isfinite(duration) && duration > 0 && isfinite(current)) self.mainPositionSlider.value = current / duration; if (isfinite(subDuration) && subDuration > 0 && isfinite(subCurrent)) self.subPositionSlider.value = subCurrent / subDuration; if (!self.loopSeekInProgress && self.loopEnabled && CMTIME_IS_VALID(self.loopEnd) && current >= CMTimeGetSeconds(self.loopEnd)) { self.loopSeekInProgress = YES; if (self.linkedPlayback && CMTIME_IS_VALID(self.subLoopStart)) { [self.mainPlayer seekToTime:self.loopStart toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; [self.subPlayer seekToTime:self.subLoopStart toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; } else { [self seekBoth:self.loopStart]; } self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ self.loopSeekInProgress = NO; }); [self updateIndividualTransportButtons]; return; } if (self.linkedPlayback) return; if (self.automaticLoopLimit == 0 || !isfinite(duration) || duration <= 0 || !isfinite(current) || current < duration - .15) return; if (self.automaticLoopDeadline && [[NSDate date] compare:self.automaticLoopDeadline] != NSOrderedAscending) { self.automaticLoopLimit = 0; return; } if (self.automaticLoopLimit > 0 && self.automaticLoopCount >= self.automaticLoopLimit) { self.automaticLoopLimit = 0; return; } self.automaticLoopCount += 1; [self seekBoth:kCMTimeZero]; self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; }
+- (void)speedChanged:(UISlider *)slider {
+    self.speed = roundf(slider.value * 100) / 100; self.speedValueLabel.text = [NSString stringWithFormat:@"%.2f×", self.speed];
+    if (self.linkedPlayback && (self.mainPlayer.rate > 0 || (self.pairedSeekInProgress && self.pairedWantsPlayback))) {
+        double relative = (self.pairedSeekInProgress ? CMTimeGetSeconds(self.pairedMainTarget) : CMTimeGetSeconds(self.mainPlayer.currentTime)) - CMTimeGetSeconds(self.linkedMainAnchor);
+        [self seekLinkedRelative:relative play:YES];
+    } else if (!self.linkedPlayback) { BOOL playing = self.mainPlayer.rate > 0; self.mainPlayer.rate = playing ? self.speed : 0; self.subPlayer.rate = playing ? self.speed : 0; }
+}
+
+- (void)updatePosition { [self updatePlaybackCounters]; [self updateSyncMarkers]; double commonDuration = MIN(CMTimeGetSeconds(self.mainPlayer.currentItem.duration), CMTimeGetSeconds(self.subPlayer.currentItem.duration)); if (!self.unlinkedPositionSlider.isTracking && isfinite(commonDuration) && commonDuration > 0) self.unlinkedPositionSlider.value = MIN(1, MAX(0, CMTimeGetSeconds(self.mainPlayer.currentTime) / commonDuration)); [self updateIndividualTransportButtons]; double duration = CMTimeGetSeconds(self.mainPlayer.currentItem.duration); double current = CMTimeGetSeconds(self.mainPlayer.currentTime); double subDuration = CMTimeGetSeconds(self.subPlayer.currentItem.duration); double subCurrent = CMTimeGetSeconds(self.subPlayer.currentTime); if (self.linkedPlayback && self.hasLinkedAnchors) { double linkedDuration = [self linkedDurationSeconds]; WJSyncRange range = [self sharedSyncRange]; double linkedStart = CMTimeGetSeconds(self.linkedMainAnchor) + range.lower; double elapsed = MAX(0, CMTimeGetSeconds(self.mainPlayer.currentTime) - linkedStart); if (linkedDuration > 0 && !self.positionSlider.isTracking && !self.pairedSeekInProgress) self.positionSlider.value = MIN(1, elapsed / linkedDuration); if (!self.pairedSeekInProgress && self.mainPlayer.rate > 0 && linkedDuration > 0 && elapsed >= linkedDuration - .001) { [self seekLinkedRelative:range.upper play:NO]; } } else if (isfinite(duration) && duration > 0 && isfinite(current)) { self.positionSlider.value = current / duration; } if (!self.mainPositionSlider.isTracking && !CMTIME_IS_NUMERIC(self.requestedMainTime) && isfinite(duration) && duration > 0 && isfinite(current)) self.mainPositionSlider.value = current / duration; if (!self.subPositionSlider.isTracking && !CMTIME_IS_NUMERIC(self.requestedSubTime) && isfinite(subDuration) && subDuration > 0 && isfinite(subCurrent)) self.subPositionSlider.value = subCurrent / subDuration; if (!self.pairedSeekInProgress && !self.loopSeekInProgress && self.loopEnabled && CMTIME_IS_VALID(self.loopEnd) && current >= CMTimeGetSeconds(self.loopEnd)) { self.loopSeekInProgress = YES; if (self.linkedPlayback && self.hasLinkedAnchors) { [self seekLinkedRelative:CMTimeGetSeconds(self.loopStart)-CMTimeGetSeconds(self.linkedMainAnchor) play:YES]; } else { [self seekPairMain:self.loopStart sub:self.loopStart play:YES]; }  [self updateIndividualTransportButtons]; return; } if (self.linkedPlayback) return; if (self.automaticLoopLimit == 0 || !isfinite(duration) || duration <= 0 || !isfinite(current) || current < duration - .15) return; if (self.automaticLoopDeadline && [[NSDate date] compare:self.automaticLoopDeadline] != NSOrderedAscending) { self.automaticLoopLimit = 0; return; } if (self.automaticLoopLimit > 0 && self.automaticLoopCount >= self.automaticLoopLimit) { self.automaticLoopLimit = 0; return; } self.automaticLoopCount += 1; [self seekPairMain:kCMTimeZero sub:kCMTimeZero play:YES]; }
 - (void)configureAutomaticLoop { NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults; self.automaticLoopLimit = 0; self.automaticLoopCount = 1; self.automaticLoopDeadline = nil; if (![defaults boolForKey:@"WJLoopPlayback"]) return; NSInteger count = [defaults integerForKey:@"WJLoopCount"]; if (count == 0) count = 3; if (count > 0) self.automaticLoopLimit = count; else { self.automaticLoopLimit = -1; NSInteger seconds = [defaults integerForKey:@"WJLoopDuration"]; if (seconds > 0) self.automaticLoopDeadline = [NSDate dateWithTimeIntervalSinceNow:seconds]; } }
-- (double)linkedDurationSeconds { if (!self.hasLinkedAnchors) return 0; double mainDuration = CMTimeGetSeconds(self.mainPlayer.currentItem.duration); double subDuration = CMTimeGetSeconds(self.subPlayer.currentItem.duration); double mainAnchor = CMTimeGetSeconds(self.linkedMainAnchor); double subAnchor = CMTimeGetSeconds(self.linkedSubAnchor); if (!isfinite(mainDuration) || !isfinite(subDuration) || !isfinite(mainAnchor) || !isfinite(subAnchor)) return 0; return MAX(0, MIN(mainDuration - MAX(0, mainAnchor - 2.0), subDuration - MAX(0, subAnchor - 2.0))); }
-- (void)seekLinkedElapsed:(double)elapsed { if (!self.hasLinkedAnchors) return; double maxElapsed = [self linkedDurationSeconds]; elapsed = MAX(0, MIN(elapsed, maxElapsed)); double mainBase = MAX(0, CMTimeGetSeconds(self.linkedMainAnchor) - 2.0); double subBase = MAX(0, CMTimeGetSeconds(self.linkedSubAnchor) - 2.0); CMTime mainTime = CMTimeMakeWithSeconds(mainBase + elapsed, 600); CMTime subTime = CMTimeMakeWithSeconds(subBase + elapsed, 600); [self.mainPlayer seekToTime:mainTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; [self.subPlayer seekToTime:subTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; }
-- (void)seekBoth:(CMTime)time { if (self.linkedPlayback && self.hasLinkedAnchors) { double elapsed = CMTimeGetSeconds(CMTimeSubtract(time, self.linkedMainAnchor)); [self seekLinkedElapsed:elapsed]; return; } [self.mainPlayer seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; [self.subPlayer seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; }
-- (void)returnToSyncPoint:(id)sender { if (!self.hasLinkedAnchors) return; double mainStart = MAX(0, CMTimeGetSeconds(self.linkedMainAnchor) - 2.0); double subStart = MAX(0, CMTimeGetSeconds(self.linkedSubAnchor) - 2.0); CMTime mainTime = CMTimeMakeWithSeconds(mainStart, 600); CMTime subTime = CMTimeMakeWithSeconds(subStart, 600); [self.mainPlayer seekToTime:mainTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; [self.subPlayer seekToTime:subTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; [self.playButton setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal]; [self updateIndividualTransportButtons]; }
-- (void)syncFrameStep:(UIButton *)sender { if (!self.linkedPlayback || !self.hasLinkedAnchors) return; [self.mainPlayer pause]; [self.subPlayer pause]; double base = MAX(0, CMTimeGetSeconds(self.linkedMainAnchor) - 2.0); double elapsed = MAX(0, CMTimeGetSeconds(self.mainPlayer.currentTime) - base); double delta = CMTimeGetSeconds([self frameDurationForPlayer:self.mainPlayer]); if (sender.tag == 8) delta = -delta; [self seekLinkedElapsed:elapsed + delta]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; [self updateIndividualTransportButtons]; }
+- (WJSyncRange)sharedSyncRange {
+    if (!self.hasLinkedAnchors) return (WJSyncRange){0,0};
+    return WJSharedSyncRange(CMTimeGetSeconds(self.mainPlayer.currentItem.duration), CMTimeGetSeconds(self.subPlayer.currentItem.duration), CMTimeGetSeconds(self.linkedMainAnchor), CMTimeGetSeconds(self.linkedSubAnchor));
+}
+- (double)linkedDurationSeconds { WJSyncRange range = [self sharedSyncRange]; return MAX(0, range.upper-range.lower); }
+- (void)seekPairMain:(CMTime)mainTime sub:(CMTime)subTime play:(BOOL)play {
+    NSUInteger generation = ++self.pairedSeekGeneration;
+    self.pairedSeekInProgress = YES; self.pairedWantsPlayback = play;
+    self.pairedMainTarget = mainTime; self.pairedSubTarget = subTime;
+    [self.mainPlayer pause]; [self.subPlayer pause];
+    [self.playButton setImage:[UIImage systemImageNamed:play ? @"pause.fill" : @"play.fill"] forState:UIControlStateNormal];
+    dispatch_group_t seeks = dispatch_group_create(); __block BOOL completed = YES;
+    __weak typeof(self) weakSelf = self;
+    for (AVPlayer *player in @[self.mainPlayer,self.subPlayer]) {
+        dispatch_group_enter(seeks);
+        [player seekToTime:player == self.mainPlayer ? mainTime : subTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completed = completed && finished; dispatch_group_leave(seeks); });
+        }];
+    }
+    dispatch_group_notify(seeks, dispatch_get_main_queue(), ^{
+        typeof(self) self = weakSelf;
+        if (!self || generation != self.pairedSeekGeneration) return;
+        [self finishPairedSeekForGeneration:generation completed:completed deadline:CACurrentMediaTime()+15.0];
+    });
+}
+- (void)finishPairedSeekForGeneration:(NSUInteger)generation completed:(BOOL)completed deadline:(CFTimeInterval)deadline {
+    if (generation != self.pairedSeekGeneration) return;
+    BOOL wantsPlayback = completed && self.pairedWantsPlayback && self.view.window;
+    BOOL ready = self.mainPlayer.status == AVPlayerStatusReadyToPlay && self.subPlayer.status == AVPlayerStatusReadyToPlay;
+    BOOL failed = self.mainPlayer.status == AVPlayerStatusFailed || self.subPlayer.status == AVPlayerStatusFailed;
+    // A successful seek does not guarantee AVPlayer itself is ready for a
+    // host-clock playback request. Keep both paused until both players are ready.
+    if (wantsPlayback && !ready && !failed && CACurrentMediaTime() < deadline) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(.05*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf finishPairedSeekForGeneration:generation completed:completed deadline:deadline];
+        });
+        return;
+    }
+    self.pairedSeekInProgress = NO; self.loopSeekInProgress = NO;
+    if (wantsPlayback && ready) {
+#if DEBUG
+            NSLog(@"[Comparison] synchronized start ready main=%ld sub=%ld targets=%.6f/%.6f", (long)self.mainPlayer.status, (long)self.subPlayer.status, CMTimeGetSeconds(self.pairedMainTarget), CMTimeGetSeconds(self.pairedSubTarget));
+#endif
+            CMTime hostTime = CMTimeAdd(CMClockGetTime(CMClockGetHostTimeClock()), CMTimeMakeWithSeconds(.1, 1000000000));
+            self.mainPlayer.automaticallyWaitsToMinimizeStalling = NO;
+            self.subPlayer.automaticallyWaitsToMinimizeStalling = NO;
+            [self.mainPlayer setRate:self.speed time:self.pairedMainTarget atHostTime:hostTime];
+            [self.subPlayer setRate:self.speed time:self.pairedSubTarget atHostTime:hostTime];
+    } else {
+        self.pairedWantsPlayback = NO;
+        [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+        if (wantsPlayback && !self.presentedViewController) {
+            NSError *error = self.mainPlayer.error ?: self.subPlayer.error;
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"動画を再生できませんでした" message:error.localizedDescription ?: @"動画の再生準備が完了しませんでした。再生ボタンで再試行してください。" preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+        }
+    }
+    [self updatePosition];
+}
+- (void)seekLinkedRelative:(double)relative play:(BOOL)play {
+    WJSyncRange range = [self sharedSyncRange];
+    if (!isfinite(relative) || range.upper <= range.lower) return;
+    relative = MAX(range.lower, MIN(range.upper, relative));
+    CMTime offset = CMTimeMakeWithSeconds(relative,600);
+    [self seekPairMain:CMTimeAdd(self.linkedMainAnchor,offset) sub:CMTimeAdd(self.linkedSubAnchor,offset) play:play];
+}
+- (void)seekIndividualPlayer:(AVPlayer *)player time:(CMTime)time {
+    double duration = CMTimeGetSeconds(player.currentItem.duration);
+    if (!isfinite(duration) || duration <= 0 || !CMTIME_IS_NUMERIC(time)) return;
+    time = CMTimeMakeWithSeconds(MAX(0, MIN(duration, CMTimeGetSeconds(time))),600);
+    BOOL main = player == self.mainPlayer;
+    if (main) self.requestedMainTime = time; else self.requestedSubTime = time;
+    [player seekToTime:time toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CMTime requested = main ? self.requestedMainTime : self.requestedSubTime;
+            if (CMTIME_IS_NUMERIC(requested) && CMTimeCompare(requested,time) == 0) {
+                if (main) self.requestedMainTime = kCMTimeInvalid; else self.requestedSubTime = kCMTimeInvalid;
+                [self updatePosition];
+            }
+        });
+    }];
+}
+- (void)updateSyncMarkers {
+    WJSyncRange range = [self sharedSyncRange]; double duration = range.upper-range.lower;
+    self.positionSlider.syncFraction = self.hasLinkedAnchors ? (duration > 0 ? -range.lower/duration : 0) : NAN;
+    double mainDuration = CMTimeGetSeconds(self.mainPlayer.currentItem.duration), subDuration = CMTimeGetSeconds(self.subPlayer.currentItem.duration);
+    self.mainPositionSlider.syncFraction = self.hasLinkedAnchors && isfinite(mainDuration) && mainDuration > 0 ? CMTimeGetSeconds(self.linkedMainAnchor)/mainDuration : NAN;
+    self.subPositionSlider.syncFraction = self.hasLinkedAnchors && isfinite(subDuration) && subDuration > 0 ? CMTimeGetSeconds(self.linkedSubAnchor)/subDuration : NAN;
+}
+
+- (void)seekLinkedElapsed:(double)elapsed { WJSyncRange range = [self sharedSyncRange]; [self seekLinkedRelative:range.lower+elapsed play:NO]; }
+
+- (void)seekBoth:(CMTime)time {
+    if (self.linkedPlayback && self.hasLinkedAnchors) { [self seekLinkedRelative:CMTimeGetSeconds(time)-CMTimeGetSeconds(self.linkedMainAnchor) play:NO]; return; }
+    [self seekPairMain:time sub:time play:NO];
+}
+
+- (void)returnToSyncPoint:(id)sender {
+    if (!self.linkedPlayback || !self.hasLinkedAnchors) return;
+    WJSyncRange range = [self sharedSyncRange];
+    [self seekLinkedRelative:MAX(range.lower,-2.0) play:YES];
+}
+
+- (void)syncFrameStep:(UIButton *)sender {
+    if (!self.linkedPlayback || !self.hasLinkedAnchors) return;
+    double relative = (self.pairedSeekInProgress ? CMTimeGetSeconds(self.pairedMainTarget) : CMTimeGetSeconds(self.mainPlayer.currentTime)) - CMTimeGetSeconds(self.linkedMainAnchor);
+    double delta = CMTimeGetSeconds([self frameDurationForPlayer:self.mainPlayer]);
+    [self pausePlayback]; [self seekLinkedRelative:relative + (sender.tag == 8 ? -delta : delta) play:NO];
+}
+
 - (void)setA:(id)sender { self.loopStart = self.mainPlayer.currentTime; self.subLoopStart = self.subPlayer.currentTime; self.loopEnd = kCMTimeInvalid; self.subLoopEnd = kCMTimeInvalid; self.loopEnabled = NO; [self refreshComparisonFeatureButtons]; }
-- (void)setB:(id)sender { CMTime now = self.mainPlayer.currentTime; if (!CMTIME_IS_VALID(self.loopStart) || CMTimeCompare(now, self.loopStart) <= 0) return; self.loopEnd = now; self.subLoopEnd = self.subPlayer.currentTime; self.loopEnabled = YES; [self refreshComparisonFeatureButtons]; if (self.linkedPlayback && CMTIME_IS_VALID(self.subLoopStart)) { [self.mainPlayer seekToTime:self.loopStart toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; [self.subPlayer seekToTime:self.subLoopStart toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; } else { [self seekBoth:self.loopStart]; } self.mainPlayer.rate = self.speed; self.subPlayer.rate = self.speed; }
+- (void)setB:(id)sender { CMTime now = self.mainPlayer.currentTime; if (!CMTIME_IS_VALID(self.loopStart) || CMTimeCompare(now, self.loopStart) <= 0) return; self.loopEnd = now; self.subLoopEnd = self.subPlayer.currentTime; self.loopEnabled = YES; [self refreshComparisonFeatureButtons]; if (self.linkedPlayback && self.hasLinkedAnchors) { [self seekLinkedRelative:CMTimeGetSeconds(self.loopStart)-CMTimeGetSeconds(self.linkedMainAnchor) play:YES]; } else { [self seekPairMain:self.loopStart sub:self.loopStart play:YES]; } }
 - (void)toggleLoop:(id)sender {
     // A/B区間が設定済みなら、リピート解除時に区間設定も同時に解除する。
     // 通常再生画面と同じく、A/Bの色・選択状態も初期状態へ戻す。
@@ -326,7 +619,7 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
 }
 - (CMTime)frameDurationForPlayer:(AVPlayer *)player { AVAssetTrack *track = [[player.currentItem.asset tracksWithMediaType:AVMediaTypeVideo] firstObject]; CMTime d = track.minFrameDuration; if (CMTIME_IS_VALID(d) && d.value > 0) return d; float fps = track.nominalFrameRate; return CMTimeMakeWithSeconds(fps > 0 ? 1.0 / fps : 1.0 / 30.0, 600); }
 - (void)stepFrame:(id)sender { [self.mainPlayer pause]; [self.subPlayer pause]; CMTime step = [self frameDurationForPlayer:self.mainPlayer]; [self seekBoth:CMTimeAdd(self.mainPlayer.currentTime, step)]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; }
-- (void)individualTransport:(UIButton *)sender { AVPlayer *player = sender.tag <= 3 ? self.mainPlayer : self.subPlayer; BOOL isPlay = (sender.tag == 2 || sender.tag == 5); if (isPlay) { if (player.rate > 0) { [player pause]; [sender setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; } else { player.rate = self.speed; [sender setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal]; } return; } [player pause]; CMTime current = player.currentTime; CMTime delta = [self frameDurationForPlayer:player]; if (sender.tag == 1 || sender.tag == 4) delta = CMTimeMake(-delta.value, delta.timescale); CMTime target = CMTimeAdd(current, delta); if (CMTIME_COMPARE_INLINE(target, <, kCMTimeZero)) target = kCMTimeZero; [player seekToTime:target toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:nil]; UIButton *play = sender.tag <= 3 ? self.mainPlayButton : self.subPlayButton; [play setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; }
+- (void)individualTransport:(UIButton *)sender { AVPlayer *player = sender.tag <= 3 ? self.mainPlayer : self.subPlayer; BOOL isPlay = (sender.tag == 2 || sender.tag == 5); if (isPlay) { if (player.rate > 0) { [player pause]; [sender setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; } else { player.rate = self.speed; [sender setImage:[UIImage systemImageNamed:@"pause.fill"] forState:UIControlStateNormal]; } return; } [player pause]; CMTime current = player.currentTime; CMTime delta = [self frameDurationForPlayer:player]; if (sender.tag == 1 || sender.tag == 4) delta = CMTimeMake(-delta.value, delta.timescale); CMTime target = CMTimeAdd(current, delta); if (CMTIME_COMPARE_INLINE(target, <, kCMTimeZero)) target = kCMTimeZero; [self seekIndividualPlayer:player time:target]; UIButton *play = sender.tag <= 3 ? self.mainPlayButton : self.subPlayButton; [play setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; }
 - (void)toggleMainMirror:(id)sender { self.mainMirrored = !self.mainMirrored; [self.view setNeedsLayout]; [self.mainMirrorButton setImage:[UIImage systemImageNamed:(self.mainMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
 - (void)toggleSubMirror:(id)sender { self.subMirrored = !self.subMirrored; [self.view setNeedsLayout]; [self.subMirrorButton setImage:[UIImage systemImageNamed:(self.subMirrored ? @"arrow.left.and.right.righttriangle.left.righttriangle.right.fill" : @"arrow.left.and.right.righttriangle.left.righttriangle.right")] forState:UIControlStateNormal]; }
 - (void)selectComparisonVideo:(id)sender {
@@ -334,7 +627,11 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     UIViewController *library = [WaterJumpSettingsViewController videoLibraryViewControllerForComparisonWithMainURL:self.mainURL selection:^(NSURL *url) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
+        [self pausePlayback]; self.pairedSeekGeneration += 1; self.pairedSeekInProgress = NO;
+        self.requestedMainTime = kCMTimeInvalid; self.requestedSubTime = kCMTimeInvalid;
         self.subURL = url;
+        self.showsReceivedCameraNames = NO;
+        self.mainLabel.text = @"MAIN"; self.subLabel.text = @"SUB";
         [self.subPlayer replaceCurrentItemWithPlayerItem:[AVPlayerItem playerItemWithURL:url]];
         self.subZoomScale = 1.0;
         [self refreshComparisonAspects];
@@ -356,7 +653,10 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     CGAffineTransform transform = CGAffineTransformMakeScale(mainArea ? (self.mainMirrored ? -*scale : *scale) : (self.subMirrored ? -*scale : *scale), *scale);
     if (mainArea) self.mainLayer.affineTransform = transform; else self.subLayer.affineTransform = transform;
 }
-- (void)close { [self.mainPlayer pause]; [self.subPlayer pause]; self.loopEnabled = NO; self.loopSeekInProgress = NO; if (self.observer) { [self.mainPlayer removeTimeObserver:self.observer]; self.observer = nil; } UIWindowScene *scene = self.view.window.windowScene;
+- (void)pausePlayback { self.pairedWantsPlayback = NO; [self.mainPlayer pause]; [self.subPlayer pause]; [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal]; [self updateIndividualTransportButtons]; }
+
+- (void)close { self.pairedSeekGeneration += 1; self.pairedWantsPlayback = NO; [self.mainPlayer pause]; [self.subPlayer pause]; self.loopEnabled = NO; self.loopSeekInProgress = NO; if (self.observer) { [self.mainPlayer removeTimeObserver:self.observer]; self.observer = nil; } UIWindowScene *scene = self.view.window.windowScene;
+    if (self.parentViewController) { void (^handler)(void) = self.closeHandler; self.closeHandler = nil; [self willMoveToParentViewController:nil]; [self.view removeFromSuperview]; [self removeFromParentViewController]; if (handler) handler(); return; }
     UIViewController *presenter = self.presentingViewController;
     [self dismissViewControllerAnimated:YES completion:^{
         [presenter setNeedsUpdateOfSupportedInterfaceOrientations];
@@ -370,8 +670,10 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     // リンクを有効にした時点のMAIN/SUB位置をそれぞれの基準にする。
     // 書き出しはリンクポイントの2秒前から開始し、短い方の終端で終了する。
     BOOL useLinkedRange = self.hasLinkedAnchors && CMTIME_IS_VALID(self.linkedMainAnchor) && CMTIME_IS_VALID(self.linkedSubAnchor);
-    double mainStartSeconds = useLinkedRange ? MAX(0.0, CMTimeGetSeconds(self.linkedMainAnchor) - 2.0) : 0.0;
-    double subStartSeconds = useLinkedRange ? MAX(0.0, CMTimeGetSeconds(self.linkedSubAnchor) - 2.0) : 0.0;
+    WJSyncRange range = [self sharedSyncRange];
+    double preroll = MAX(range.lower, -2.0);
+    double mainStartSeconds = useLinkedRange ? CMTimeGetSeconds(self.linkedMainAnchor) + preroll : 0.0;
+    double subStartSeconds = useLinkedRange ? CMTimeGetSeconds(self.linkedSubAnchor) + preroll : 0.0;
     double mainDurationSeconds = CMTimeGetSeconds(mainAsset.duration), subDurationSeconds = CMTimeGetSeconds(subAsset.duration);
     double outputDurationSeconds = useLinkedRange ? MIN(MAX(0.0, mainDurationSeconds - mainStartSeconds), MAX(0.0, subDurationSeconds - subStartSeconds)) : MIN(mainDurationSeconds, subDurationSeconds);
     if (!isfinite(outputDurationSeconds) || outputDurationSeconds <= 0) { [self showExportError:[NSError errorWithDomain:@"MTJudge.Export" code:3 userInfo:@{NSLocalizedDescriptionKey:@"同期位置から書き出せる区間がありません。"}]]; return; }
@@ -434,12 +736,14 @@ static void WJConfigureComparisonInstruction(AVMutableVideoCompositionLayerInstr
     [self refreshFavorites];
 }
 - (void)prepareForAutoplayReplacement {
+    self.pairedSeekGeneration += 1; self.pairedWantsPlayback = NO;
     [self.mainPlayer pause]; [self.subPlayer pause];
     self.loopEnabled = NO; self.loopSeekInProgress = NO;
     self.automaticLoopLimit = 0;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (self.observer) { [self.mainPlayer removeTimeObserver:self.observer]; self.observer = nil; }
+    if (self.subTimeObserver) { [self.subPlayer removeTimeObserver:self.subTimeObserver]; self.subTimeObserver = nil; }
 }
 
-- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; }
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; if (self.observer) [self.mainPlayer removeTimeObserver:self.observer]; if (self.subTimeObserver) [self.subPlayer removeTimeObserver:self.subTimeObserver]; }
 @end

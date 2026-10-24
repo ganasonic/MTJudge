@@ -27,6 +27,22 @@ import CryptoKit
         while let data = try file.read(upToCount: 1024 * 1024), !data.isEmpty { hash.update(data: data) }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
+    // Read capture time, never the receive/save time, when aligning two cameras.
+    @objc public static func recordingStartTime(_ url: URL) -> TimeInterval {
+        let info = ((try? Data(contentsOf: url.appendingPathExtension("wj.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
+        let value = (info["recordingStart"] as? NSNumber)?.doubleValue ?? Double(info["recordingStart"] as? String ?? "") ?? 0
+        if value.isFinite && value > 0 { return value > 100_000_000_000 ? value / 1000 : value }
+        let embedded = AVURLAsset(url: url).creationDate?.dateValue?.timeIntervalSince1970 ?? 0
+        if embedded.isFinite && embedded > 0 { return embedded }
+        if !(info["imported"] as? Bool ?? false) {
+            let name = info["filename"] as? String ?? url.lastPathComponent
+            if let range = name.range(of: "^MTJ[0-9]{17}", options: .regularExpression) {
+                let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX"); formatter.dateFormat = "yyyyMMddHHmmssSSS"
+                if let date = formatter.date(from: String(name[range].dropFirst(3))) { return date.timeIntervalSince1970 }
+            }
+        }
+        return 0
+    }
     static func metadata(_ url: URL, id: String, tags: [[String: String]]) throws -> [String: Any] {
         let asset = AVURLAsset(url: url)
         let duration = CMTimeGetSeconds(asset.duration)
@@ -39,8 +55,8 @@ import CryptoKit
             let fourcc = CMFormatDescriptionGetMediaSubType(format as! CMFormatDescription)
             codec = String(bytes: [UInt8((fourcc >> 24) & 255), UInt8((fourcc >> 16) & 255), UInt8((fourcc >> 8) & 255), UInt8(fourcc & 255)], encoding: .ascii) ?? "unknown"
         }
-        let start = UserDefaults.standard.double(forKey: "WJRecordingStartTime")
-        return ["version":1, "id":id, "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "cameraName":UserDefaults.standard.string(forKey:"WJCameraName") ?? deviceName, "groupID":UserDefaults.standard.string(forKey:"WJCameraGroupID") ?? "", "recordingStart": start > 0 ? start : Date().timeIntervalSince1970, "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
+        let start = recordingStartTime(url)
+        return ["version":1, "id":id, "remoteOnly":false, "sourceCameraID":UserDefaults.standard.string(forKey:"WJDeviceID") ?? "", "sessionID":UserDefaults.standard.string(forKey:"WJSessionID") ?? id, "cameraRole":UserDefaults.standard.string(forKey:"WJCameraRole") ?? "MAIN_CAMERA", "cameraName":UserDefaults.standard.string(forKey:"WJCameraName") ?? deviceName, "groupID":UserDefaults.standard.string(forKey:"WJCameraGroupID") ?? "", "recordingStart": start, "size":size, "sha256":try digest(url), "tags":tags, "duration":duration,
                 "width":abs(track.naturalSize.width), "height":abs(track.naturalSize.height), "fps":track.nominalFrameRate,
                 "bitrate":track.estimatedDataRate, "codec":codec, "created":Date().timeIntervalSince1970]
     }
@@ -134,6 +150,9 @@ import CryptoKit
                     catch { lastError = error; Thread.sleep(forTimeInterval: 0.25) }
                 }
                 guard var info = info else { throw lastError ?? failure("動画ファイルを読み込めません。元動画は保持しています。") }
+                let captureStart = UserDefaults.standard.double(forKey:"WJRecordingStartTime")
+                if captureStart.isFinite && captureStart > 0 { info["recordingStart"] = captureStart }
+                info["remoteOnly"] = UserDefaults.standard.bool(forKey:"WJRecordingRemoteOnly")
                 let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyyMMddHHmmssSSS"
                 let sourceName = source.deletingPathExtension().lastPathComponent
                 info["filename"] = sourceName.hasPrefix("MTJ") ? sourceName + ".MOV" : "MTJ" + formatter.string(from: Date()) + ".MOV"
@@ -188,6 +207,13 @@ import CryptoKit
         }
         defaults.set(oldPaths, forKey: "WJFavoriteVideoPaths")
         NotificationCenter.default.post(name: Notification.Name("WJVideoFavoritesChanged"), object: url)
+    }
+    @objc public static func recordPlayback(_ url: URL) {
+        let d = UserDefaults.standard, filename = url.lastPathComponent
+        var recent = d.stringArray(forKey:"WJPlaybackHistory") ?? []
+        recent.removeAll { $0 == filename }; recent.insert(filename, at:0)
+        d.set(Array(recent.prefix(10)), forKey:"WJPlaybackHistory")
+        d.set(filename, forKey:"WJLastPlayedFilename")
     }
     @objc public static func videos() -> [URL] {
         // 旧バージョンの自動録画先を、現在の受信動画と同じRecordingsへ移行する。

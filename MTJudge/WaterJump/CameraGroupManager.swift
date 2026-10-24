@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import MultipeerConnectivity
 import CryptoKit
 
@@ -37,13 +38,19 @@ import CryptoKit
     private var active = false
     private var searching = false
     private var advertisement = ""
+    private var retryPeerID = ""
+    private var retryToken = ""
+    private var lastRetryToken = ""
     private var roster: [[String:String]] {
         get { defaults.array(forKey:"WJGroupMembers") as? [[String:String]] ?? [] }
         set { defaults.set(newValue,forKey:"WJGroupMembers") }
     }
     private var mainID: String { defaults.string(forKey:"WJGroupMainID") ?? "" }
     private static let roles = ["CAMERA_1","CAMERA_2","CAMERA_3","RECEIVER"]
-    private var ownName: String { defaults.string(forKey:"WJCameraName") ?? "MTJudge" }
+    private var ownName: String {
+        let name = defaults.string(forKey:"WJCameraName")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? UIDevice.current.name : name
+    }
     private func keyName(_ id: String) -> String { "group-" + groupID + "-" + id }
     private func key(_ id: String) -> String? { PeerDiscoveryManager.secret(keyName(id)) }
     private func proof(_ key: String, _ text: String) -> String {
@@ -73,11 +80,11 @@ import CryptoKit
             browser = MCNearbyServiceBrowser(peer:peer,serviceType:"mtjudge-group")
             browser?.delegate = self; browser?.startBrowsingForPeers()
         }
-        let signature = automatic && role == "MAIN" ? groupID + ownName : ""
+        let signature = automatic && role == "MAIN" ? groupID + ownName + retryToken : ""
         if signature != advertisement {
             advertiser?.stopAdvertisingPeer(); advertiser = nil; advertisement = signature
             if !signature.isEmpty {
-                advertiser = MCNearbyServiceAdvertiser(peer:peer,discoveryInfo:["group":groupID,"name":defaults.string(forKey:"WJCameraGroupName") ?? ownName,"main":discovery.deviceID],serviceType:"mtjudge-group")
+                advertiser = MCNearbyServiceAdvertiser(peer:peer,discoveryInfo:["group":groupID,"name":defaults.string(forKey:"WJCameraGroupName") ?? ownName,"main":discovery.deviceID,"retryPeer":retryPeerID,"retry":retryToken],serviceType:"mtjudge-group")
                 advertiser?.delegate = self; advertiser?.startAdvertisingPeer()
             }
         }
@@ -146,6 +153,41 @@ import CryptoKit
         defaults.set(role.hasPrefix("CAMERA_") ? "SUB_CAMERA" : "MAIN_CAMERA",forKey:"WJCameraRole")
         if role.hasPrefix("CAMERA_") { defaults.set(false,forKey:"WJTagBeforeTransfer") }
     }
+    @objc public func reconnectMember(_ id: String) -> Bool {
+#if DEBUG
+        NSLog("[CameraGroup] reconnect requested role=%@ peer=%@",role,id)
+#endif
+        guard automatic, roster.contains(where: { $0["id"] == id }) else { message = "接続端末一覧を開き直してください"; changed?(); return false }
+        if authenticated[id] != nil { message = "すでに接続されています"; changed?(); return true }
+        if role == "MAIN" {
+            // Retry only the selected member; keep other connections and all credentials.
+            if let p = session.connectedPeers.first(where: { $0.displayName == id }) { session.cancelConnectPeer(p) }
+            invitations.removeValue(forKey:id); challenges.removeValue(forKey:id); enrollments.remove(id)
+            retryPeerID = id; retryToken = UUID().uuidString
+            configure(active:true,remoteAddress:remote)
+        } else {
+            guard id == mainID else { return false }
+            browser?.stopBrowsingForPeers(); browser = nil
+            configure(active:true,remoteAddress:remote)
+            if let host = found[groupID]?.0 { retryHost(host) }
+            else { invitedAt.removeValue(forKey:mainID) }
+        }
+        message = "再接続を試みています。相手端末でアプリを開いてください。承認が必要な場合はメイン端末で許可してください。"
+        changed?(); return true
+    }
+    private func retryHost(_ host: MCPeerID) {
+        guard authenticated[host.displayName] == nil else { return }
+#if DEBUG
+        NSLog("[CameraGroup] retry host=%@",host.displayName)
+#endif
+        invitedAt.removeValue(forKey:host.displayName)
+        session.cancelConnectPeer(host)
+        let currentSession = session
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.3) { [weak self] in
+            guard let self = self, self.session === currentSession, self.automatic, self.mainID == host.displayName, self.authenticated[host.displayName] == nil else { return }
+            self.invitedAt.removeValue(forKey:host.displayName); self.invite(host)
+        }
+    }
     private func invite(_ host: MCPeerID) {
         guard automatic, role != "MAIN", host.displayName == mainID, !session.connectedPeers.contains(host) else { return }
         if let date = invitedAt[mainID], Date().timeIntervalSince(date) < 35 { return }
@@ -177,6 +219,13 @@ import CryptoKit
             guard roster.contains(where:{$0["id"] == p.displayName && $0["role"] == d["role"]}) else { return }
         } else { guard p.displayName == mainID, d["role"] == "MAIN" else { return } }
         if role != "MAIN" { roster = [["id":p.displayName,"role":"MAIN","name":d["name"] ?? "MTJudge"]] }
+        else if let name = d["name"], !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Refresh the saved list as well as the live descriptor after a camera is renamed.
+            var members = roster
+            if let index = members.firstIndex(where: { $0["id"] == p.displayName }), members[index]["name"] != name {
+                members[index]["name"] = name; roster = members
+            }
+        }
         descriptors[p.displayName] = d; rebuild()
     }
     private func rebuild() {
@@ -224,7 +273,11 @@ extension CameraGroupManager: MCNearbyServiceBrowserDelegate, MCNearbyServiceAdv
         guard self.browser === browser else { return }
         guard let info = info, let id = info["group"], UUID(uuidString:id) != nil, info["main"] == p.displayName, p != peer else { return }
         found[id] = (p,info); groups = found.values.map{$0.1}; changed?()
-        if automatic, groupID == id, mainID == p.displayName { invite(p) }
+        if automatic, groupID == id, mainID == p.displayName {
+            if info["retryPeer"] == discovery.deviceID, let token = info["retry"], !token.isEmpty, token != lastRetryToken {
+                lastRetryToken = token; retryHost(p)
+            } else { invite(p) }
+        }
     }
     public func browser(_ browser: MCNearbyServiceBrowser, lostPeer p: MCPeerID) {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.browser(browser,lostPeer:p) }; return }; guard self.browser === browser else { return }; found = found.filter{$0.value.0 != p}; groups = found.values.map{$0.1}; changed?() }
@@ -287,6 +340,9 @@ extension CameraGroupManager: MCNearbyServiceBrowserDelegate, MCNearbyServiceAdv
             } else if type == "authenticate", self.role == "MAIN", let nonce = self.challenges.removeValue(forKey:p.displayName), let secret = self.key(p.displayName), self.matches(packet["proof"] as? String,key:secret,text:"member|"+self.groupID+"|"+nonce), let d = packet["device"] as? [String:String], d["id"] == p.displayName, d["role"] == self.invitations[p.displayName] {
                 var members = self.roster; members.removeAll{$0["id"] == p.displayName}; members.append(["id":p.displayName,"role":d["role"]!,"name":d["name"] ?? "MTJudge"]); self.roster = members
                 self.authenticated[p.displayName] = p; self.acceptDescriptor(d,from:p)
+#if DEBUG
+                NSLog("[CameraGroup] authenticated member=%@",p.displayName)
+#endif
                 self.send(["type":"descriptor","device":self.descriptor()],to:p)
             } else if self.authenticated[p.displayName] == p {
                 if type == "descriptor", let d = packet["device"] as? [String:String] { self.acceptDescriptor(d,from:p) }

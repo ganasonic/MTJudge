@@ -8,6 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// ローカル撮影直後の再生など、閉じる／再生終了時の戻り先を呼び出し側で指定する。
 @property (nonatomic, copy, nullable) void (^closeHandler)(void);
 @property (nonatomic, copy, nullable) void (^playbackEndedHandler)(void);
+@property (nonatomic, copy, nullable) void (^drawingModeChangedHandler)(BOOL drawing);
 - (instancetype)initWithVideoURL:(NSURL *)url;
 - (void)replaceVideoURL:(NSURL *)url;
 - (void)setPlaylist:(NSArray<NSURL *> *)playlist currentIndex:(NSInteger)index;

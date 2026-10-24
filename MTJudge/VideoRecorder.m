@@ -2,12 +2,22 @@
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 #import <CoreImage/CoreImage.h>
+#import <ImageIO/ImageIO.h>
 #import "SkeletonConnections.h"
 
 // プライベートプロパティをここで宣言
 @interface VideoRecorder () <AVCaptureFileOutputRecordingDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (atomic) BOOL stopRequested;
+@property (atomic) BOOL cameraRequestedActive;
+@property (atomic) BOOL localPreviewSuppressionRequested;
+@property (nonatomic, strong) dispatch_queue_t sessionControlQueue;
+@property (atomic) NSTimeInterval previewRequestedUntil;
+@property (atomic, strong) NSDictionary *previewFrame;
+@property (nonatomic, strong) CIContext *previewContext;
+@property (nonatomic) NSTimeInterval lastPreviewTime;
+@property (nonatomic) BOOL previewGenerationActive;
+@property (atomic) CGImagePropertyOrientation remotePreviewOrientation;
 @property (nonatomic, strong) AVCaptureSession *captureSession;
 @property (atomic, strong) AVCaptureDevice *cameraDevice;
 @property (nonatomic, strong) dispatch_queue_t zoomQueue;
@@ -32,18 +42,40 @@
         // AVCaptureSession: ビデオやオーディオのキャプチャ（取得）タスクを管理する中核的なオブジェクト
         // カメラからの映像入力、マイクからの音声入力、そしてそれらの出力を結びつける役割を担う
         _captureSession = [[AVCaptureSession alloc] init];
+        _cameraRequestedActive = YES;
+        _sessionControlQueue = dispatch_queue_create("com.MTJudge.cameraLifecycle", DISPATCH_QUEUE_SERIAL);
         _zoomQueue = dispatch_queue_create("com.MTJudge.cameraZoom", DISPATCH_QUEUE_SERIAL);
         // AVCaptureMovieFileOutput: ビデオとオーディオのデータをファイルに録画するための出力オブジェクト
         _movieFileOutput = [[AVCaptureMovieFileOutput alloc] init];
         _isRecording = NO;
+        _remotePreviewOrientation = kCGImagePropertyOrientationRight;
+        [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(remotePreviewOrientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
+        [self remotePreviewOrientationChanged:nil];
     }
     return self;
+}
+
+// Only normalize the remote JPEG; recording, Vision and the local preview keep their existing connections.
+- (void)remotePreviewOrientationChanged:(NSNotification *)notification {
+    switch (UIDevice.currentDevice.orientation) {
+        case UIDeviceOrientationPortrait: self.remotePreviewOrientation = kCGImagePropertyOrientationRight; break;
+        case UIDeviceOrientationPortraitUpsideDown: self.remotePreviewOrientation = kCGImagePropertyOrientationLeft; break;
+        case UIDeviceOrientationLandscapeLeft: self.remotePreviewOrientation = kCGImagePropertyOrientationUp; break;
+        case UIDeviceOrientationLandscapeRight: self.remotePreviewOrientation = kCGImagePropertyOrientationDown; break;
+        default: break; // Keep the last upright direction while the phone lies flat.
+    }
+}
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    [UIDevice.currentDevice endGeneratingDeviceOrientationNotifications];
 }
 
 #pragma mark - Camera Setup
 
 // カメラとマイクのセットアップ
 - (void)setupCamera {
+    dispatch_sync(self.sessionControlQueue, ^{
 
     // キャプチャセッションの設定を開始
     [_captureSession beginConfiguration];
@@ -108,8 +140,9 @@
     // 次の処理（例：Visionフレームワークでの解析）に渡されるようになる
     self.videoDataOutput.videoSettings = rgbOutputSettings;
     // フレームの処理が間に合わなかった場合に、そのフレームを破棄するかどうかを制御するプロパティ
-    // NOに設定することで、フレームが遅延しても破棄せず、すべてのフレームを処理するようにしている
-    self.videoDataOutput.alwaysDiscardsLateVideoFrames = NO;
+    // 解析・リモートプレビュー用の遅延フレームを溜めて録画用バッファを枯渇させない。
+    // 保存動画は別のMovieFileOutputが記録するため、録画フレームの破棄設定ではない。
+    self.videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
     
     // 映像フレームを処理するための専用のキューを作成
     // カメラから取得した映像フレームを、バックグラウンドの専用キューで処理するための設定を行っている
@@ -136,6 +169,7 @@
     _previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:_captureSession];
 
     _previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    _previewLayer.connection.enabled = !self.localPreviewSuppressionRequested;
     /* videoGravityは、レイヤーの境界内にコンテンツ（映像）がどのように表示されるかを決定するプロパティ
        AVLayerVideoGravityResizeAspectFillに設定することで、映像がレイヤーの境界を完全に覆うように拡大・縮小される
        ただし、映像のアスペクト比（縦横比）は維持されるため、レイヤーの一部が映像で覆われない場合がある
@@ -152,7 +186,7 @@
     */
     [_captureSession commitConfiguration];// 冒頭の beginConfiguration に対応
     // 設定が確定されたキャプチャセッションを開始
-    [self.captureSession startRunning];
+    if (self.cameraRequestedActive) [self.captureSession startRunning];
     self.cameraDevice = videoInput ? videoDevice : nil;
     if ([videoDevice lockForConfiguration:nil]) {
         videoDevice.videoZoomFactor = MIN(videoDevice.maxAvailableVideoZoomFactor, MAX(videoDevice.minAvailableVideoZoomFactor, 1.0 / [self zoomDisplayMultiplier]));
@@ -160,8 +194,33 @@
     }
 
     NSLog(@"Camera setup complete. Session running: %d", self.captureSession.isRunning);
+    NSLog(@"[Recording] preset=%@ hardwareCost=%.3f inputs=%@ movieConnections=%@ dataConnections=%@", self.captureSession.sessionPreset, self.captureSession.hardwareCost, self.captureSession.inputs, self.movieFileOutput.connections, self.videoDataOutput.connections);
+    });
 }
 
+- (void)setCameraActive:(BOOL)active {
+    self.cameraRequestedActive = active;
+    dispatch_async(self.sessionControlQueue, ^{
+        if (self.cameraRequestedActive) { if (self.captureSession.inputs.count && !self.captureSession.isRunning) [self.captureSession startRunning]; }
+        else if (!self.isRecording && self.captureSession.isRunning) { [self.captureSession stopRunning]; self.previewFrame = nil; }
+    });
+}
+- (NSDictionary *)remotePreviewSnapshot {
+    self.previewRequestedUntil = NSDate.date.timeIntervalSince1970 + 3.0;
+    NSDictionary *frame = self.previewFrame;
+    if (!frame || NSDate.date.timeIntervalSince1970 - [frame[@"timestamp"] doubleValue] > 3.0) return @{@"error":@"プレビュー準備中。撮影端末でカメラ画面を開いてください。"};
+    return frame;
+}
+- (void)setLocalPreviewSuppressed:(BOOL)suppressed {
+    if (self.localPreviewSuppressionRequested == suppressed) return;
+    self.localPreviewSuppressionRequested = suppressed;
+    dispatch_async(self.sessionControlQueue, ^{
+        self.previewLayer.connection.enabled = !self.localPreviewSuppressionRequested;
+#if DEBUG
+        NSLog(@"[CameraPower] localPreview=%d sessionRunning=%d movieActive=%d", !self.localPreviewSuppressionRequested, self.captureSession.isRunning, [self.movieFileOutput connectionWithMediaType:AVMediaTypeVideo].active);
+#endif
+    });
+}
 #pragma mark - Camera Zoom
 
 - (CGFloat)zoomDisplayMultiplier {
@@ -247,6 +306,12 @@
             @(AVCaptureVideoStabilizationModeStandard),
             @(AVCaptureVideoStabilizationModeOff)
         ];
+        if (@available(iOS 18.0, *)) {
+        } else if (self.captureSession.hardwareCost >= .99) {
+            // 旧端末で映像出力2系統がハードウェア予算上限に達する場合は
+            // 高遅延のCinematic処理を重ねず、標準の手ぶれ補正を使用する。
+            stabilizationModes = @[@(AVCaptureVideoStabilizationModeStandard), @(AVCaptureVideoStabilizationModeOff)];
+        }
         for (NSNumber *value in stabilizationModes) {
             AVCaptureVideoStabilizationMode mode = (AVCaptureVideoStabilizationMode)value.integerValue;
             if (movieConnection.supportsVideoStabilization && [self.cameraDevice.activeFormat isVideoStabilizationModeSupported:mode]) {
@@ -294,7 +359,11 @@
 
 #pragma mark - AVCaptureFileOutputRecordingDelegate
 - (void)captureOutput:(AVCaptureFileOutput *)output didStartRecordingToOutputFileAtURL:(NSURL *)fileURL fromConnections:(NSArray *)connections {
+    NSLog(@"[Recording] movie started connections=%@ stabilization=%ld", connections, (long)[self.movieFileOutput connectionWithMediaType:AVMediaTypeVideo].activeVideoStabilizationMode);
+    double recorded = CMTimeGetSeconds(output.recordedDuration);
+    NSTimeInterval captureStart = NSDate.date.timeIntervalSince1970 - (isfinite(recorded) && recorded > 0 ? recorded : 0);
     dispatch_async(dispatch_get_main_queue(), ^{
+        [NSUserDefaults.standardUserDefaults setDouble:captureStart forKey:@"WJRecordingStartTime"];
         if ([self.delegate respondsToSelector:@selector(videoRecorderDidStart:)]) [self.delegate videoRecorderDidStart:self];
         if (self.stopRequested) [self.movieFileOutput stopRecording];
     });
@@ -304,6 +373,8 @@
 // 録画が完了したときに呼ばれるデリゲートメソッド
 - (void)captureOutput:(AVCaptureFileOutput *)output didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL fromConnections:(NSArray *)connections error:(NSError *)error {
     _isRecording = NO;
+    AVURLAsset *recordedAsset = [AVURLAsset URLAssetWithURL:outputFileURL options:nil];
+    NSLog(@"[Recording] movie finished videoTracks=%lu audioTracks=%lu duration=%.3f error=%@", (unsigned long)[recordedAsset tracksWithMediaType:AVMediaTypeVideo].count, (unsigned long)[recordedAsset tracksWithMediaType:AVMediaTypeAudio].count, CMTimeGetSeconds(recordedAsset.duration), error);
     BOOL successful = !error || [error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] boolValue];
     if (!successful) {
         [self notifyRecordingFinished:outputFileURL error:error];
@@ -420,6 +491,29 @@
 
 // 映像フレームが取得されるたびに呼ばれるデリゲートメソッド
 - (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+#if DEBUG
+    BOOL previewWanted = self.cameraRequestedActive && now < self.previewRequestedUntil;
+    if (previewWanted != self.previewGenerationActive) { self.previewGenerationActive = previewWanted; NSLog(@"[CameraPower] remotePreviewGeneration=%d", previewWanted); }
+#endif
+    if (now >= self.previewRequestedUntil && self.previewFrame) { self.previewFrame = nil; self.lastPreviewTime = 0; }
+    if (self.cameraRequestedActive && now < self.previewRequestedUntil && now - self.lastPreviewTime >= 0.9) {
+        self.lastPreviewTime = now;
+        @autoreleasepool {
+            CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+            if (buffer) {
+                CIImage *image = [[CIImage imageWithCVPixelBuffer:buffer] imageByApplyingOrientation:self.remotePreviewOrientation];
+                image = [image imageByApplyingTransform:CGAffineTransformMakeTranslation(-image.extent.origin.x,-image.extent.origin.y)];
+                CGFloat scale = MIN(1, 320.0 / MAX(image.extent.size.width, image.extent.size.height));
+                image = [image imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
+                if (!self.previewContext) self.previewContext = [CIContext contextWithOptions:@{kCIContextCacheIntermediates:@NO}];
+                CGColorSpaceRef color = CGColorSpaceCreateDeviceRGB();
+                NSData *jpeg = [self.previewContext JPEGRepresentationOfImage:image colorSpace:color options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality:@0.5}];
+                CGColorSpaceRelease(color);
+                if (jpeg) self.previewFrame = @{@"image":[jpeg base64EncodedStringWithOptions:0], @"timestamp":@(now)};
+            }
+        }
+    }
     // 映像フレームをViewControllerに渡す
     //NSLog(@"Received a sample buffer in VideoRecorder.");
     if ([self.delegate respondsToSelector:@selector(videoRecorder:didOutputSampleBuffer:)]) {

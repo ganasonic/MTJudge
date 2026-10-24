@@ -45,5 +45,8 @@
 
 // カメラをセットアップするメソッド
 - (void)setupCamera;
+- (void)setCameraActive:(BOOL)active;
+- (void)setLocalPreviewSuppressed:(BOOL)suppressed;
+- (NSDictionary *)remotePreviewSnapshot;
 
 @end

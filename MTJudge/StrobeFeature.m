@@ -7,6 +7,58 @@
 - (instancetype)initWithImageURL:(NSURL *)url completion:(void (^)(BOOL saved))completion;
 @end
 
+// A temporal median supplies a background reference even when Vision misses a small subject.
+// The displayed background remains the first frame, preserving the existing appearance.
+static CIImage *MTJStrobeBackground(AVAssetImageGenerator *generator, CIContext *context, double start, double end) {
+    NSMutableArray<CIImage *> *samples = [NSMutableArray array];
+    for (NSInteger i=0; i<5; i++) {
+        CMTime time = CMTimeMakeWithSeconds(start+(end-start)*(i+.5)/5.0,600);
+        CGImageRef cg = [generator copyCGImageAtTime:time actualTime:NULL error:nil];
+        if (!cg) continue;
+        CIImage *image = [CIImage imageWithCGImage:cg]; CGImageRelease(cg);
+        CGFloat scale = MIN(1,640.0/MAX(image.extent.size.width,image.extent.size.height));
+        image = [image imageByApplyingTransform:CGAffineTransformMakeScale(scale,scale)];
+        [samples addObject:[image imageByCroppingToRect:CGRectIntegral(image.extent)]];
+    }
+    if (!samples.count) return nil;
+    if (samples.count == 5) {
+        const int pairs[][2] = {{0,1},{3,4},{2,4},{2,3},{1,4},{0,3},{0,2},{1,3},{1,2}};
+        for (NSInteger i=0; i<9; i++) {
+            int a=pairs[i][0], b=pairs[i][1]; CIImage *left=samples[a], *right=samples[b];
+            samples[a] = [left imageByApplyingFilter:@"CIMinimumCompositing" withInputParameters:@{kCIInputBackgroundImageKey:right}];
+            samples[b] = [left imageByApplyingFilter:@"CIMaximumCompositing" withInputParameters:@{kCIInputBackgroundImageKey:right}];
+        }
+    }
+    CIImage *median = samples[samples.count == 5 ? 2 : 0];
+    CGImageRef cg = [context createCGImage:median fromRect:median.extent];
+    CIImage *result = cg ? [CIImage imageWithCGImage:cg] : nil; if (cg) CGImageRelease(cg);
+    return result;
+}
+static CIImage *MTJStrobeMotionMask(CIImage *image, CIImage *reference, CIContext *context) {
+    if (!reference) return nil;
+    CGRect small = reference.extent;
+    CIImage *scaled = [[image imageByApplyingTransform:CGAffineTransformMakeScale(small.size.width/image.extent.size.width,small.size.height/image.extent.size.height)] imageByCroppingToRect:small];
+    CIImage *difference = [scaled imageByApplyingFilter:@"CIDifferenceBlendMode" withInputParameters:@{kCIInputBackgroundImageKey:reference}];
+    CIVector *weights = [CIVector vectorWithX:3 Y:3 Z:3 W:0];
+    CIImage *mask = [difference imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{@"inputRVector":weights,@"inputGVector":weights,@"inputBVector":weights,@"inputAVector":[CIVector vectorWithX:0 Y:0 Z:0 W:1],@"inputBiasVector":[CIVector vectorWithX:-.35 Y:-.35 Z:-.35 W:0]}];
+    mask = [mask imageByApplyingFilter:@"CIColorClamp" withInputParameters:@{@"inputMinComponents":[CIVector vectorWithX:0 Y:0 Z:0 W:0],@"inputMaxComponents":[CIVector vectorWithX:1 Y:1 Z:1 W:1]}];
+    mask = [mask imageByApplyingFilter:@"CIMorphologyMinimum" withInputParameters:@{kCIInputRadiusKey:@1}];
+    mask = [mask imageByApplyingFilter:@"CIMorphologyMaximum" withInputParameters:@{kCIInputRadiusKey:@1}];
+    // A moving camera must not paste the whole background over earlier poses.
+    CIImage *average = [mask imageByApplyingFilter:@"CIAreaAverage" withInputParameters:@{kCIInputExtentKey:[CIVector vectorWithCGRect:small]}];
+    uint8_t coverage[4]={0}; CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    [context render:average toBitmap:coverage rowBytes:4 bounds:CGRectMake(0,0,1,1) format:kCIFormatRGBA8 colorSpace:space]; CGColorSpaceRelease(space);
+    if (coverage[0] > 102) return nil;
+    return [[mask imageByApplyingTransform:CGAffineTransformMakeScale(image.extent.size.width/small.size.width,image.extent.size.height/small.size.height)] imageByCroppingToRect:image.extent];
+}
+static BOOL MTJStrobeMaskHasSubject(CIImage *mask, CIContext *context) {
+    if (!mask) return NO;
+    CIImage *maximum = [mask imageByApplyingFilter:@"CIAreaMaximum" withInputParameters:@{kCIInputExtentKey:[CIVector vectorWithCGRect:mask.extent]}];
+    uint8_t pixel[4]={0}; CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    [context render:maximum toBitmap:pixel rowBytes:4 bounds:CGRectMake(0,0,1,1) format:kCIFormatRGBA8 colorSpace:space]; CGColorSpaceRelease(space);
+    return MAX(pixel[0],MAX(pixel[1],pixel[2])) > 24;
+}
+
 @implementation StrobeImageComposer
 + (void)generateForVideoURL:(NSURL *)videoURL startTime:(CMTime)startTime endTime:(CMTime)endTime intervalMilliseconds:(NSInteger)intervalMilliseconds completion:(MTJStrobeCompletion)completion {
     [self generateForVideoURL:videoURL startTime:startTime endTime:endTime intervalMilliseconds:intervalMilliseconds progress:nil completion:completion];
@@ -23,42 +75,40 @@
             if (!error) {
                 start = MAX(0, MIN(duration, start)); end = MAX(start, MIN(duration, end));
                 AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:asset]; generator.appliesPreferredTrackTransform = YES; generator.requestedTimeToleranceBefore = kCMTimeZero; generator.requestedTimeToleranceAfter = kCMTimeZero; generator.maximumSize = CGSizeMake(fabs(track.naturalSize.width), fabs(track.naturalSize.height));
-                CIContext *context = [CIContext contextWithOptions:nil]; CIImage *composite = nil; NSInteger frameCount = MAX(1, (NSInteger)ceil((end-start) * 1000.0 / interval) + 1);
+                CIContext *context = [CIContext contextWithOptions:@{kCIContextCacheIntermediates:@NO}]; CIImage *composite = nil;
+                CIImage *reference = MTJStrobeBackground(generator,context,start,end);
+                NSInteger subjects = 0; NSInteger frameCount = MAX(1, (NSInteger)ceil((end-start) * 1000.0 / interval) + 1);
                 for (NSInteger index = 0; index < frameCount; index++) {
                     @autoreleasepool {
                         double seconds = MIN(end, start + ((double)index * interval / 1000.0)); CMTime requested = CMTimeMakeWithSeconds(seconds, 600); NSError *frameError = nil; CGImageRef cg = [generator copyCGImageAtTime:requested actualTime:NULL error:&frameError];
                         if (!cg) { if (index == 0) error = frameError ?: [NSError errorWithDomain:@"MTJudge.Strobe" code:2 userInfo:@{NSLocalizedDescriptionKey:@"動画フレームを取得できません。"}]; continue; }
                         CIImage *image = [CIImage imageWithCGImage:cg]; if (!composite) composite = image; // 開始フレームを基準背景にする
-                        VNGeneratePersonSegmentationRequest *request = [VNGeneratePersonSegmentationRequest new]; request.qualityLevel = VNGeneratePersonSegmentationRequestQualityLevelBalanced; request.outputPixelFormat = kCVPixelFormatType_OneComponent8; VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:cg options:@{}]; [handler performRequests:@[request] error:&frameError];
+                        CIImage *mask = MTJStrobeMotionMask(image,reference,context);
+                        VNGeneratePersonSegmentationRequest *request = [VNGeneratePersonSegmentationRequest new]; request.qualityLevel = VNGeneratePersonSegmentationRequestQualityLevelBalanced; request.outputPixelFormat = kCVPixelFormatType_OneComponent8;
+                        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:cg options:@{}]; NSError *visionError = nil;
+                        [handler performRequests:@[request] error:&visionError];
                         VNPixelBufferObservation *observation = request.results.firstObject;
-                        if (observation && !frameError) {
-                            // Visionの人物マスクは低解像度で返るため、元フレームの座標系へ拡大してから合成する。
-                            CIImage *mask = [CIImage imageWithCVPixelBuffer:observation.pixelBuffer];
-                            CGRect imageExtent = image.extent;
-                            CGRect maskExtent = mask.extent;
-                            if (maskExtent.size.width > 0 && maskExtent.size.height > 0) {
-                                CGAffineTransform scale = CGAffineTransformMakeScale(imageExtent.size.width / maskExtent.size.width,
-                                                                                      imageExtent.size.height / maskExtent.size.height);
-                                mask = [mask imageByApplyingTransform:scale];
-                                mask = [mask imageByCroppingToRect:imageExtent];
+                        if (observation && !visionError) {
+                            CIImage *personMask = [CIImage imageWithCVPixelBuffer:observation.pixelBuffer];
+                            if (personMask.extent.size.width > 0 && personMask.extent.size.height > 0) {
+                                personMask = [[personMask imageByApplyingTransform:CGAffineTransformMakeScale(image.extent.size.width/personMask.extent.size.width,image.extent.size.height/personMask.extent.size.height)] imageByCroppingToRect:image.extent];
+                                mask = mask ? [personMask imageByApplyingFilter:@"CIMaximumCompositing" withInputParameters:@{kCIInputBackgroundImageKey:mask}] : personMask;
                             }
-                            CIImage *transparent = [[CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:0]] imageByCroppingToRect:imageExtent];
-                            CIFilter *blend = [CIFilter filterWithName:@"CIBlendWithMask"];
-                            [blend setValue:image forKey:kCIInputImageKey];
-                            [blend setValue:transparent forKey:kCIInputBackgroundImageKey];
-                            [blend setValue:mask forKey:kCIInputMaskImageKey];
-                            CIImage *person = [blend.outputImage imageByCroppingToRect:imageExtent];
-                            if (person && index > 0) {
-                                CIFilter *sourceOver = [CIFilter filterWithName:@"CISourceOverCompositing"];
-                                [sourceOver setValue:person forKey:kCIInputImageKey];
-                                [sourceOver setValue:composite forKey:kCIInputBackgroundImageKey];
-                                if (sourceOver.outputImage) composite = [sourceOver.outputImage imageByCroppingToRect:imageExtent];
+                        }
+                        if (index > 0 && MTJStrobeMaskHasSubject(mask,context)) {
+                            // Blend against the accumulated image; previous poses must remain visible.
+                            CIImage *next = [image imageByApplyingFilter:@"CIBlendWithMask" withInputParameters:@{kCIInputBackgroundImageKey:composite,kCIInputMaskImageKey:mask}];
+                            if (next) { composite = [next imageByCroppingToRect:image.extent]; subjects += 1; }
+                            if (subjects%8 == 0) {
+                                CGImageRef flattened = [context createCGImage:composite fromRect:composite.extent];
+                                if (flattened) { composite = [CIImage imageWithCGImage:flattened]; CGImageRelease(flattened); }
                             }
                         }
                         CGImageRelease(cg);
                         if (progress) { double value = (double)(index + 1) / (double)frameCount; dispatch_async(dispatch_get_main_queue(), ^{ progress(value); }); }
                     }
                 }
+                if (!error && subjects == 0) error = [NSError errorWithDomain:@"MTJudge.Strobe" code:4 userInfo:@{NSLocalizedDescriptionKey:@"指定区間から人物・動いている対象物を抽出できませんでした。対象物が動いている区間と切り出し間隔を選び直してください。"}];
                 if (!error && composite) {
                     CGRect extent = composite.extent; CGImageRef result = [context createCGImage:composite fromRect:extent];
                     if (result) {
