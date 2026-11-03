@@ -49,6 +49,8 @@ static NSArray<NSURL *> *WJVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property(nonatomic, strong) UICollectionView *gridView;
 @property(nonatomic, strong) UICollectionView *recentView;
 @property(nonatomic, strong) NSArray<NSURL *> *recentVideos;
+@property(nonatomic, strong) UIBarButtonItem *dateSelectionButton;
+@property(nonatomic) BOOL loadingSelectionDates;
 @property(nonatomic, strong) NSCache<NSString *, UIImage *> *thumbnailCache;
 @property(nonatomic, copy) void (^playbackSelectionHandler)(NSURL *url);
 @property (nonatomic, strong) NSArray<NSURL *> *videos;
@@ -292,6 +294,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     self.gridMode = [NSUserDefaults.standardUserDefaults objectForKey:@"WJVideoGridMode"] ? [NSUserDefaults.standardUserDefaults boolForKey:@"WJVideoGridMode"] : YES;
     self.gridView.hidden = !self.gridMode; self.tableView.hidden = self.gridMode;
     self.navigationItem.leftBarButtonItem = self.comparisonSelectionMode ? nil : [[UIBarButtonItem alloc] initWithTitle:MTJText(@"選択") style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
+    [self updateDateSelectionButton];
     UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"写真") style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
     UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
     grid.accessibilityLabel = MTJText(@"リスト表示とサムネイル表示を切り替え");
@@ -322,12 +325,103 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshVideos) name:@"WJVideoFavoritesChanged" object:nil];
     [self refreshVideos];
 }
+- (void)updateDateSelectionButton {
+    if (self.comparisonSelectionMode) return;
+    if (!self.dateSelectionButton) self.dateSelectionButton = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"日付別選択") style:UIBarButtonItemStylePlain target:self action:@selector(selectVideosByDate)];
+    self.dateSelectionButton.enabled = !self.loadingSelectionDates;
+    self.navigationItem.leftBarButtonItems = @[self.navigationItem.leftBarButtonItem, self.dateSelectionButton];
+    self.dateSelectionButton.accessibilityLabel = MTJText(@"日付別選択");
+    [self updateDateSelectionTitle];
+}
+- (void)updateDateSelectionTitle {
+    if (!self.dateSelectionButton || self.comparisonSelectionMode) return;
+    UIFont *font = [UIFont systemFontOfSize:17];
+    NSString *fullTitle = MTJText(@"日付別選択");
+    CGFloat left = 0, right = 0;
+    for (UIBarButtonItem *item in self.navigationItem.leftBarButtonItems) {
+        NSString *title = item == self.dateSelectionButton ? fullTitle : item.title;
+        left += MAX(44, [title sizeWithAttributes:@{NSFontAttributeName:font}].width+16)+8;
+    }
+    for (UIBarButtonItem *item in self.navigationItem.rightBarButtonItems) right += MAX(44, [item.title sizeWithAttributes:@{NSFontAttributeName:font}].width+16)+8;
+    CGFloat titleWidth = [self.title sizeWithAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:17]}].width;
+    CGFloat available = self.navigationController.navigationBar.bounds.size.width;
+    if (available <= 0) available = self.view.bounds.size.width;
+    NSString *title = available < MAX(left,right)*2+titleWidth+32 ? MTJText(@"日付別") : fullTitle;
+    if (![self.dateSelectionButton.title isEqualToString:title]) self.dateSelectionButton.title = title;
+}
+- (void)toggleDateSelectionURLs:(NSArray<NSURL *> *)urls {
+    NSSet *targets = [NSSet setWithArray:urls];
+    NSMutableArray<NSIndexPath *> *paths = [NSMutableArray array];
+    [self.videos enumerateObjectsUsingBlock:^(NSURL *url, NSUInteger index, BOOL *stop) {
+        if ([targets containsObject:url]) [paths addObject:[NSIndexPath indexPathForRow:index inSection:0]];
+    }];
+    if (!paths.count) return;
+    if (!self.editing) [self beginMultiSelect];
+    NSSet *selected = [NSSet setWithArray:self.tableView.indexPathsForSelectedRows ?: @[]];
+    BOOL allSelected = YES;
+    for (NSIndexPath *path in paths) if (![selected containsObject:path]) { allSelected = NO; break; }
+    for (NSIndexPath *path in paths) {
+        if (allSelected) [self.tableView deselectRowAtIndexPath:path animated:NO];
+        else [self.tableView selectRowAtIndexPath:path animated:NO scrollPosition:UITableViewScrollPositionNone];
+        [self.tableView cellForRowAtIndexPath:path].accessoryType = allSelected ? UITableViewCellAccessoryNone : UITableViewCellAccessoryCheckmark;
+    }
+    [self.gridView reloadData];
+    if (!allSelected) {
+        if (self.gridMode) [self.gridView scrollToItemAtIndexPath:paths.firstObject atScrollPosition:UICollectionViewScrollPositionCenteredVertically animated:NO];
+        else [self.tableView scrollToRowAtIndexPath:paths.firstObject atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
+    }
+}
+- (void)selectVideosByDate {
+    if (self.comparisonSelectionMode || self.loadingSelectionDates || self.presentedViewController) return;
+    self.loadingSelectionDates = YES; self.dateSelectionButton.enabled = NO;
+    NSArray<NSURL *> *snapshot = [self.videos copy];
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+        NSMutableDictionary<NSDate *, NSMutableArray<NSURL *> *> *groups = [NSMutableDictionary dictionary];
+        NSCalendar *calendar = [NSCalendar.currentCalendar copy];
+        NSDate *unknown = NSDate.distantPast;
+        for (NSURL *url in snapshot) { @autoreleasepool {
+            NSTimeInterval seconds = [ReceivedVideoManager recordingStartTime:url];
+            NSDate *date = isfinite(seconds) && seconds > 0 ? [NSDate dateWithTimeIntervalSince1970:seconds] : nil;
+            if (!date) {
+                id info = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:[url URLByAppendingPathExtension:@"wj.json"]] ?: NSData.data options:0 error:nil];
+                id created = [info isKindOfClass:NSDictionary.class] ? info[@"created"] : nil;
+                seconds = [created respondsToSelector:@selector(doubleValue)] ? [created doubleValue] : 0;
+                if (isfinite(seconds) && seconds > 0) date = [NSDate dateWithTimeIntervalSince1970:seconds];
+            }
+            if (!date) date = [url resourceValuesForKeys:@[NSURLCreationDateKey] error:nil][NSURLCreationDateKey];
+            NSDate *day = date ? [calendar startOfDayForDate:date] : unknown;
+            if (!groups[day]) groups[day] = [NSMutableArray array];
+            [groups[day] addObject:url];
+        } }
+        NSArray<NSDate *> *days = [groups.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSDate *a, NSDate *b) { return [b compare:a]; }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf; if (!self) return;
+            self.loadingSelectionDates = NO; self.dateSelectionButton.enabled = YES;
+            if (!self.view.window || self.presentedViewController) return;
+            UIAlertController *list = [UIAlertController alertControllerWithTitle:MTJText(@"日付別選択") message:MTJText(days.count ? @"日付を選ぶと、その日の動画を全て選択します。全て選択済みの日付は選択を解除します。" : @"練習動画がありません。") preferredStyle:UIAlertControllerStyleActionSheet];
+            NSDateFormatter *formatter = [NSDateFormatter new]; formatter.dateFormat = @"yyyy/MM/dd (EEE)";
+            NSSet *selected = [NSSet setWithArray:[self selectedVideoURLs]];
+            for (NSDate *day in days) {
+                NSArray<NSURL *> *urls = [groups[day] copy]; BOOL allSelected = YES;
+                for (NSURL *url in urls) if (![selected containsObject:url]) { allSelected = NO; break; }
+                NSString *date = [day isEqual:unknown] ? MTJText(@"撮影日不明") : [formatter stringFromDate:day];
+                NSString *title = [NSString stringWithFormat:@"%@%@（%lu件）", allSelected ? @"✓ " : @"", date, (unsigned long)urls.count];
+                [list addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { [weakSelf toggleDateSelectionURLs:urls]; }]];
+            }
+            [list addAction:[UIAlertAction actionWithTitle:MTJText(@"キャンセル") style:UIAlertActionStyleCancel handler:nil]];
+            list.popoverPresentationController.barButtonItem = self.dateSelectionButton;
+            [self presentViewController:list animated:YES completion:nil];
+        });
+    });
+}
 - (void)beginMultiSelect {
     self.editing = YES;
     self.multiSelectPanGesture.enabled = YES; self.gridSelectPanGesture.enabled = YES;
     [self.dragSelectedIndexPaths removeAllObjects];
     self.tableView.allowsMultipleSelectionDuringEditing = YES;
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"キャンセル") style:UIBarButtonItemStylePlain target:self action:@selector(endMultiSelect)];
+    [self updateDateSelectionButton];
     UIBarButtonItem *share = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(shareSelectedVideos)];
     UIBarButtonItem *transfer = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.up.doc"] style:UIBarButtonItemStylePlain target:self action:@selector(transferSelectedVideos)];
     transfer.accessibilityLabel = MTJText(@"選択した動画と関連JSONをMTJudgeへ転送");
@@ -346,6 +440,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     self.multiSelectAutoScrollTimer = nil;
     [self.dragSelectedIndexPaths removeAllObjects];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"選択") style:UIBarButtonItemStylePlain target:self action:@selector(beginMultiSelect)];
+    [self updateDateSelectionButton];
     UIBarButtonItem *photo = [[UIBarButtonItem alloc] initWithTitle:MTJText(@"写真") style:UIBarButtonItemStylePlain target:self action:@selector(selectPhotoVideo)];
     UIBarButtonItem *grid = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:self.gridMode ? @"list.bullet" : @"square.grid.2x2"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleGridMode)];
     grid.accessibilityLabel = MTJText(@"リスト表示とサムネイル表示を切り替え");
@@ -491,7 +586,7 @@ static UIImage *WJQRCodeImage(NSString *value) {
     [super setEditing:editing animated:animated]; [self.tableView setEditing:editing animated:animated];
     self.gridView.allowsMultipleSelection = NO; [self.gridView reloadData];
 }
-- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; [self.gridView.collectionViewLayout invalidateLayout]; }
+- (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; [self updateDateSelectionTitle]; [self.gridView.collectionViewLayout invalidateLayout]; }
 - (void)thumbnailForURL:(NSURL *)url imageView:(UIImageView *)imageView {
     imageView.accessibilityIdentifier = url.lastPathComponent;
     UIImage *cached = [self.thumbnailCache objectForKey:url.lastPathComponent];

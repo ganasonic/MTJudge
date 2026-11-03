@@ -141,10 +141,12 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UIColor *backgroundColorForDrawing;
 @property (nonatomic, copy) void (^commitBlock)(NSArray<NSValue *> *points);
 @property (nonatomic, copy) void (^tapBlock)(CGPoint point);
+@property (nonatomic, copy) BOOL (^shouldBeginDrawingBlock)(void);
 @end
 
 @implementation WJDrawingCanvas {
     NSMutableArray<NSValue *> *_activePoints;
+    BOOL _consumingConfirmationTouch;
 }
 - (instancetype)initWithFrame:(CGRect)frame { if ((self = [super initWithFrame:frame])) { self.backgroundColor = UIColor.clearColor; self.userInteractionEnabled = NO; self.foregroundColor = UIColor.yellowColor; self.tool = @"直線"; _activePoints = [NSMutableArray array]; } return self; }
 - (void)setAnnotations:(NSArray<NSDictionary *> *)annotations { _annotations = [annotations copy]; [self setNeedsDisplay]; }
@@ -268,15 +270,19 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if ([tool isEqualToString:@"矢印"]) { CGFloat a=atan2(last.y-first.y,last.x-first.x),s=12; CGContextMoveToPoint(ctx,first.x,first.y); CGContextAddLineToPoint(ctx,first.x+s*cos(a-M_PI/6),first.y+s*sin(a-M_PI/6)); CGContextMoveToPoint(ctx,first.x,first.y); CGContextAddLineToPoint(ctx,first.x+s*cos(a+M_PI/6),first.y+s*sin(a+M_PI/6)); CGContextStrokePath(ctx); }
 }
 - (void)drawRect:(CGRect)rect { CGContextRef ctx = UIGraphicsGetCurrentContext(); for (NSDictionary *item in self.annotations) if ([self visible:item]) [self drawAnnotation:item inContext:ctx]; [self drawPreviewInContext:ctx]; }
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (!self.drawingEnabled) return; CGPoint p=[[touches anyObject] locationInView:self]; if ([self.tool isEqualToString:@"角度"]) { // ドラッグ方式と、点を順番にタップする方式の両方を受け付ける。
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (!self.drawingEnabled) return;
+    _consumingConfirmationTouch = self.shouldBeginDrawingBlock && !self.shouldBeginDrawingBlock();
+    if (_consumingConfirmationTouch) { [_activePoints removeAllObjects]; [self setNeedsDisplay]; return; }
+    CGPoint p=[[touches anyObject] locationInView:self]; if ([self.tool isEqualToString:@"角度"]) { // ドラッグ方式と、点を順番にタップする方式の両方を受け付ける。
         if (_activePoints.count < 3) [_activePoints addObject:[NSValue valueWithCGPoint:p]];
     } else if ([self.tool isEqualToString:@"軌道"]) {
         [_activePoints addObject:[NSValue valueWithCGPoint:p]];
     } else {
         [_activePoints removeAllObjects]; [_activePoints addObject:[NSValue valueWithCGPoint:p]];
     } [self setNeedsDisplay]; }
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (!self.drawingEnabled || _activePoints.count==0) return; CGPoint p=[[touches anyObject] locationInView:self]; if ([self.tool isEqualToString:@"軌道"] || [self.tool isEqualToString:@"フリー"]) { [_activePoints addObject:[NSValue valueWithCGPoint:p]]; } else { if (_activePoints.count==1) [_activePoints addObject:[NSValue valueWithCGPoint:p]]; else _activePoints[_activePoints.count-1]=[NSValue valueWithCGPoint:p]; } [self setNeedsDisplay]; }
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (_consumingConfirmationTouch || !self.drawingEnabled || _activePoints.count==0) return; CGPoint p=[[touches anyObject] locationInView:self]; if ([self.tool isEqualToString:@"軌道"] || [self.tool isEqualToString:@"フリー"]) { [_activePoints addObject:[NSValue valueWithCGPoint:p]]; } else { if (_activePoints.count==1) [_activePoints addObject:[NSValue valueWithCGPoint:p]]; else _activePoints[_activePoints.count-1]=[NSValue valueWithCGPoint:p]; } [self setNeedsDisplay]; }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (_consumingConfirmationTouch) { _consumingConfirmationTouch = NO; return; }
     if (!self.drawingEnabled || _activePoints.count == 0) return;
     // touchesMoved が最後のサンプルを届けないことがあるため、終了位置を必ず保存する。
     CGPoint finalPoint = [[touches anyObject] locationInView:self];
@@ -292,6 +298,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self setNeedsDisplay];
 }
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    _consumingConfirmationTouch = NO;
     // システムジェスチャーや画面遷移でキャンセルされた入力は確定しない。
     // 前回のプレビュー点を残すと、次の軸3D描画に混入して消失するため破棄する。
     [_activePoints removeAllObjects];
@@ -358,6 +365,12 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, strong) UIPanGestureRecognizer *playlistPanGesture;
 @property (nonatomic, strong) UIPanGestureRecognizer *playlistOverlayPanGesture;
 @property (nonatomic, assign) BOOL switchingPlaylist;
+@property (nonatomic, strong) UIView *playlistSwipeOverlay;
+@property (nonatomic, strong) UIView *playlistSwipeCurrentView;
+@property (nonatomic, strong) UIImageView *playlistSwipePreviousView;
+@property (nonatomic, strong) UIImageView *playlistSwipeNextView;
+@property (nonatomic, weak) UIPanGestureRecognizer *activePlaylistPan;
+@property (nonatomic, strong) NSMutableArray<AVAssetImageGenerator *> *playlistSwipeGenerators;
 @property (nonatomic, strong) UIButton *drawingButton;
 @property (nonatomic, strong) WJDrawingCanvas *drawingCanvas;
 @property (nonatomic, strong) UIView *drawingPalette;
@@ -376,6 +389,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 @property (nonatomic, assign) NSInteger drawingModeInitialAnnotationCount;
 @property (nonatomic, strong) UIButton *rotationHandle;
 @property (nonatomic, strong) UIButton *resizeHandle;
+@property (nonatomic, strong) UIButton *moveHandle;
 @property (nonatomic, strong) NSMutableDictionary *activeDrawingAnnotation;
 @property (nonatomic, strong) UIColorPickerViewController *drawingColorPicker;
 @property (nonatomic, assign) BOOL drawingColorPickerForBackground;
@@ -517,12 +531,14 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     if (!self.playlistPanGesture) {
         self.playlistPanGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePlaylistPan:)];
         self.playlistPanGesture.cancelsTouchesInView = YES;
+        self.playlistPanGesture.delegate = self;
         self.playlistPanGesture.maximumNumberOfTouches = 1;
         [self.view addGestureRecognizer:self.playlistPanGesture];
     }
     if (self.contentOverlayView && !self.playlistOverlayPanGesture) {
         self.playlistOverlayPanGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePlaylistPan:)];
         self.playlistOverlayPanGesture.cancelsTouchesInView = YES;
+        self.playlistOverlayPanGesture.delegate = self;
         self.playlistOverlayPanGesture.maximumNumberOfTouches = 1;
         [self.contentOverlayView addGestureRecognizer:self.playlistOverlayPanGesture];
     }
@@ -865,6 +881,11 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [host addSubview:self.resizeHandle];
     UIPanGestureRecognizer *resizePan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeDrawing:)];
     [self.resizeHandle addGestureRecognizer:resizePan];
+    self.moveHandle = [self featureButtonWithSymbol:@"arrow.up.and.down.and.arrow.left.and.right" action:@selector(moveHandleTapped:) label:@"軸の中心を移動"];
+    self.moveHandle.hidden = YES;
+    self.moveHandle.translatesAutoresizingMaskIntoConstraints = YES;
+    [host addSubview:self.moveHandle];
+    [self.moveHandle addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveDrawing:)]];
     self.drawingAnnotations = [NSMutableArray array];
     self.drawingTool = @"直線";
     self.drawingCategory = @"汎用";
@@ -875,6 +896,13 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.drawingCanvas.foregroundColor = self.drawingForegroundColor;
     self.drawingCanvas.backgroundColorForDrawing = self.drawingBackgroundColor;
     __weak typeof(self) weakSelf = self;
+    self.drawingCanvas.shouldBeginDrawingBlock = ^BOOL {
+        if (!weakSelf.activeDrawingAnnotation) return YES;
+        // 編集確定のタッチは、指を離すまで新しい描画に使用しない。
+        weakSelf.activeDrawingAnnotation = nil;
+        [weakSelf updateRotationHandlePosition];
+        return NO;
+    };
     self.drawingCanvas.commitBlock = ^(NSArray<NSValue *> *points) { [weakSelf commitDrawingPoints:points]; };
     self.drawingCanvas.tapBlock = ^(CGPoint point) { [weakSelf drawingTextTappedAtPoint:point]; };
     [self buildDrawingPaletteInHost:host];
@@ -1128,6 +1156,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.activeDrawingAnnotation = nil;
     self.rotationHandle.hidden = YES;
     self.resizeHandle.hidden = YES;
+    self.moveHandle.hidden = YES;
     NSURL *url = [self drawingMetadataURL];
     NSData *data = url ? [NSData dataWithContentsOfURL:url] : nil;
     NSArray *items = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
@@ -1178,6 +1207,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.speedControlHost bringSubviewToFront:self.drawingButton];
         [self.speedControlHost bringSubviewToFront:self.rotationHandle];
         [self.speedControlHost bringSubviewToFront:self.resizeHandle];
+        [self.speedControlHost bringSubviewToFront:self.moveHandle];
         self.drawingCanvas.drawingEnabled = YES;
         self.drawingCanvas.hidden = NO;
         self.drawingPalette.hidden = NO;
@@ -1191,6 +1221,8 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         double end = CMTimeGetSeconds(self.player.currentTime);
         for (NSMutableDictionary *item in self.drawingAnnotations) if (item[@"end"] == [NSNull null]) item[@"end"] = @(end);
         [self saveDrawingAnnotations];
+        self.activeDrawingAnnotation = nil;
+        [self updateRotationHandlePosition];
         self.drawingCanvas.drawingEnabled = NO;
         self.drawingCanvas.userInteractionEnabled = NO;
         self.drawingPalette.hidden = YES;
@@ -1258,7 +1290,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
     [self.drawingAnnotations addObject:item];
     [self updatePersonAnglesForCurrentRamp];
-    if ([tool isEqualToString:@"楕円"] || [tool isEqualToString:@"四角"] || [tool isEqualToString:@"三角"] || [tool isEqualToString:@"x"]) self.activeDrawingAnnotation = item;
+    if ([tool isEqualToString:@"楕円"] || [tool isEqualToString:@"四角"] || [tool isEqualToString:@"三角"] || [tool isEqualToString:@"x"] || [tool isEqualToString:@"軸1"] || [tool isEqualToString:@"軸2"] || [tool isEqualToString:@"軸3D"]) self.activeDrawingAnnotation = item;
     self.drawingCanvas.hidden = NO;
     self.drawingCanvas.annotations = self.drawingAnnotations;
     [self updateRotationHandlePosition];
@@ -1295,8 +1327,22 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
 }
 - (void)updateRotationHandlePosition {
-    if (!self.activeDrawingAnnotation || !self.rotationHandle || self.drawingCanvas.hidden) { self.rotationHandle.hidden = YES; self.resizeHandle.hidden = YES; return; }
-    NSArray *points = self.activeDrawingAnnotation[@"points"]; if (points.count < 2) { self.rotationHandle.hidden = YES; return; }
+    self.rotationHandle.hidden = YES;
+    self.resizeHandle.hidden = YES;
+    self.moveHandle.hidden = YES;
+    if (!self.drawingMode || !self.activeDrawingAnnotation || self.drawingCanvas.hidden) return;
+    NSArray *points = self.activeDrawingAnnotation[@"points"];
+    if (points.count < 2) return;
+    NSString *tool = self.activeDrawingAnnotation[@"tool"];
+    BOOL axis = [tool isEqualToString:@"軸1"] || [tool isEqualToString:@"軸2"] || [tool isEqualToString:@"軸3D"];
+    if (axis) {
+        NSArray *first = points.firstObject;
+        CGPoint center = CGPointMake([first[0] doubleValue] * self.drawingCanvas.bounds.size.width, [first[1] doubleValue] * self.drawingCanvas.bounds.size.height);
+        center = [self.drawingCanvas convertPoint:center toView:self.moveHandle.superview];
+        self.moveHandle.frame = CGRectMake(center.x - 22, center.y - 22, 44, 44);
+        self.moveHandle.hidden = NO;
+        return;
+    }
     NSArray *last = points.lastObject;
     CGFloat x = [last[0] doubleValue] * self.drawingCanvas.bounds.size.width;
     CGFloat y = [last[1] doubleValue] * self.drawingCanvas.bounds.size.height;
@@ -1304,6 +1350,26 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.resizeHandle.frame = CGRectMake(x + 20, y - 18, 36, 36);
     self.rotationHandle.hidden = NO;
     self.resizeHandle.hidden = NO;
+}
+- (void)moveHandleTapped:(id)sender { }
+- (void)moveDrawing:(UIPanGestureRecognizer *)gesture {
+    if (!self.activeDrawingAnnotation || self.moveHandle.hidden) return;
+    NSArray *points = self.activeDrawingAnnotation[@"points"];
+    if (points.count < 2) return;
+    CGPoint delta = [gesture translationInView:self.drawingCanvas];
+    [gesture setTranslation:CGPointZero inView:self.drawingCanvas];
+    NSArray *first = points.firstObject;
+    CGFloat dx = delta.x / MAX(self.drawingCanvas.bounds.size.width, 1);
+    CGFloat dy = delta.y / MAX(self.drawingCanvas.bounds.size.height, 1);
+    dx = MAX(-[first[0] doubleValue], MIN(1 - [first[0] doubleValue], dx));
+    dy = MAX(-[first[1] doubleValue], MIN(1 - [first[1] doubleValue], dy));
+    // 全点を同じ量だけ移動し、半径と角度を維持する。
+    NSMutableArray *updated = [NSMutableArray arrayWithCapacity:points.count];
+    for (NSArray *point in points) [updated addObject:@[@([point[0] doubleValue] + dx), @([point[1] doubleValue] + dy)]];
+    self.activeDrawingAnnotation[@"points"] = updated;
+    self.drawingCanvas.annotations = self.drawingAnnotations;
+    [self updateRotationHandlePosition];
+    [self saveDrawingAnnotations];
 }
 - (void)rotationHandleTapped:(id)sender { }
 - (void)rotateDrawing:(UIPanGestureRecognizer *)gesture {
@@ -1381,7 +1447,7 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
 }
 - (UIImage *)drawingColorIcon:(UIColor *)color { CGSize size=CGSizeMake(24,24); UIGraphicsBeginImageContextWithOptions(size,NO,0); CGContextRef ctx=UIGraphicsGetCurrentContext(); CGContextSetFillColorWithColor(ctx,color.CGColor); CGContextFillEllipseInRect(ctx,CGRectMake(3,3,18,18)); UIImage *image=UIGraphicsGetImageFromCurrentImageContext(); UIGraphicsEndImageContext(); return image; }
 - (UIImage *)drawingLineStyleIcon:(NSString *)style { CGSize size=CGSizeMake(72,24); UIGraphicsBeginImageContextWithOptions(size,NO,0); CGContextRef ctx=UIGraphicsGetCurrentContext(); CGContextSetStrokeColorWithColor(ctx,UIColor.labelColor.CGColor); CGContextSetLineWidth(ctx,4.0); CGContextSetLineCap(ctx,kCGLineCapRound); if ([style isEqualToString:@"点線"]) { CGFloat p[]={1.5,7}; CGContextSetLineDash(ctx,0,p,2); } else if ([style isEqualToString:@"鎖線"]) { CGFloat p[]={12,7}; CGContextSetLineDash(ctx,0,p,2); } CGContextMoveToPoint(ctx,3,12); CGContextAddLineToPoint(ctx,69,12); CGContextStrokePath(ctx); UIImage *image=UIGraphicsGetImageFromCurrentImageContext(); UIGraphicsEndImageContext(); return image; }
-- (void)drawingToolMenu:(id)sender { NSArray *values=@[@"文字",@"直線",@"矢印",@"丸",@"軸1",@"軸2",@"軸3D",@"楕円",@"四角",@"三角",@"x",@"角度",@"軌道",@"フリー"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) { NSString *display=[NSString stringWithFormat:@"%@    %@", [self drawingToolGlyph:v], [self drawingToolDisplayName:v]]; NSMutableDictionary *option=[[self drawingOption:v display:display selected:self.drawingTool] mutableCopy]; option[@"image"]=[self drawingToolIcon:v color:UIColor.labelColor]; [options addObject:option]; } [self showDrawingOptions:options title:@"描画種別" handler:^(NSString *v){ self.drawingTool=v; [self refreshDrawingPaletteState]; }]; }
+- (void)drawingToolMenu:(id)sender { NSArray *values=@[@"文字",@"直線",@"矢印",@"丸",@"軸1",@"軸2",@"軸3D",@"x",@"角度",@"軌道",@"フリー"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) { NSString *display=[NSString stringWithFormat:@"%@    %@", [self drawingToolGlyph:v], [self drawingToolDisplayName:v]]; NSMutableDictionary *option=[[self drawingOption:v display:display selected:self.drawingTool] mutableCopy]; option[@"image"]=[self drawingToolIcon:v color:UIColor.labelColor]; [options addObject:option]; } [self showDrawingOptions:options title:@"描画種別" handler:^(NSString *v){ self.drawingTool=v; [self refreshDrawingPaletteState]; }]; }
 - (void)drawingCategoryMenu:(id)sender { NSArray *values=@[@"汎用",@"基準",@"対象"]; NSMutableArray *options=[NSMutableArray array]; for (NSString *v in values) [options addObject:[self drawingOption:v display:v selected:self.drawingCategory]]; [self showDrawingOptions:options title:@"カテゴリ" handler:^(NSString *v){ self.drawingCategory=v; if ([v isEqualToString:@"基準"] || [v isEqualToString:@"対象"]) self.drawingTool=@"直線"; if ([v isEqualToString:@"基準"]) self.drawingLineStyle=@"点線"; [self refreshDrawingPaletteState]; }]; }
 - (void)drawingLineStyleMenu:(id)sender { NSArray *values=@[@"実線",@"点線",@"鎖線"]; NSArray *samples=@[@"━━━━━━  実線",@"• • • • •  点線",@"━━  ━━  ━━  鎖線"]; NSMutableArray *options=[NSMutableArray array]; for (NSInteger i=0;i<values.count;i++) [options addObject:[self drawingOption:values[i] display:samples[i] selected:self.drawingLineStyle]]; [self showDrawingOptions:options title:@"線種" handler:^(NSString *v){ self.drawingLineStyle=v; [self refreshDrawingPaletteState]; }]; }
 - (UIColor *)colorForName:(NSString *)name { NSDictionary *colors=@{@"緑":UIColor.greenColor,@"黄":UIColor.yellowColor,@"オレンジ":UIColor.orangeColor,@"ピンク":UIColor.magentaColor,@"明るい紫":UIColor.systemPurpleColor,@"赤":UIColor.redColor,@"青":UIColor.blueColor,@"白":UIColor.whiteColor}; return colors[name] ?: UIColor.greenColor; }
@@ -1544,18 +1610,100 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.playlistIndex = MAX(0, MIN(index, (NSInteger)self.playlist.count - 1));
 }
 
+- (BOOL)canSwipeToPlaylistIndex:(NSInteger)index {
+    return index >= 0 && index < (NSInteger)self.playlist.count && [[NSFileManager defaultManager] fileExistsAtPath:self.playlist[index].path];
+}
+- (UIImageView *)playlistPreviewAtIndex:(NSInteger)index overlay:(UIView *)overlay {
+    UIImageView *preview = [[UIImageView alloc] initWithFrame:overlay.bounds];
+    preview.contentMode = UIViewContentModeScaleAspectFit;
+    preview.backgroundColor = UIColor.blackColor;
+    [overlay addSubview:preview];
+    if ([self canSwipeToPlaylistIndex:index]) {
+        AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:[AVURLAsset URLAssetWithURL:self.playlist[index] options:nil]];
+        generator.appliesPreferredTrackTransform = YES;
+        generator.maximumSize = CGSizeMake(overlay.bounds.size.width * 2, overlay.bounds.size.height * 2);
+        [self.playlistSwipeGenerators addObject:generator];
+        __weak typeof(self) weakSelf = self;
+        [generator generateCGImagesAsynchronouslyForTimes:@[[NSValue valueWithCMTime:kCMTimeZero]] completionHandler:^(CMTime requestedTime, CGImageRef image, CMTime actualTime, AVAssetImageGeneratorResult result, NSError *error) {
+            UIImage *thumbnail = image && result == AVAssetImageGeneratorSucceeded ? [UIImage imageWithCGImage:image] : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (weakSelf.playlistSwipeOverlay == overlay) preview.image = thumbnail;
+            });
+        }];
+    }
+    return preview;
+}
+- (void)finishPlaylistSwipe {
+    for (AVAssetImageGenerator *generator in self.playlistSwipeGenerators) [generator cancelAllCGImageGeneration];
+    self.playlistSwipeGenerators = nil;
+    [self.playlistSwipeOverlay removeFromSuperview];
+    self.playlistSwipeOverlay = nil;
+    self.playlistSwipeCurrentView = nil;
+    self.playlistSwipePreviousView = nil;
+    self.playlistSwipeNextView = nil;
+    self.activePlaylistPan = nil;
+    self.switchingPlaylist = NO;
+}
+- (void)positionPlaylistSwipe:(CGFloat)offset {
+    CGFloat width = self.playlistSwipeOverlay.bounds.size.width;
+    self.playlistSwipeCurrentView.transform = CGAffineTransformMakeTranslation(offset, 0);
+    self.playlistSwipePreviousView.transform = CGAffineTransformMakeTranslation(offset - width, 0);
+    self.playlistSwipeNextView.transform = CGAffineTransformMakeTranslation(offset + width, 0);
+}
+- (void)revealPlaylistAfterReplacement:(NSUInteger)attempt overlay:(UIView *)overlay {
+    if (self.playlistSwipeOverlay != overlay) return;
+    if (self.player.currentItem.status == AVPlayerItemStatusUnknown && attempt < 40) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self revealPlaylistAfterReplacement:attempt + 1 overlay:overlay];
+        });
+        return;
+    }
+    [UIView animateWithDuration:0.18 animations:^{ overlay.alpha = 0; } completion:^(BOOL finished) { [self finishPlaylistSwipe]; }];
+}
 - (void)handlePlaylistPan:(UIPanGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateEnded || self.switchingPlaylist || self.playlist.count < 2) return;
-    CGPoint translation = [gesture translationInView:gesture.view];
-    if (fabs(translation.x) < 60.0 || fabs(translation.x) < fabs(translation.y) * 1.15) return;
-    NSInteger next = self.playlistIndex + (translation.x < 0 ? 1 : -1);
-    if (next < 0 || next >= (NSInteger)self.playlist.count) return;
-    NSURL *url = self.playlist[next];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:url.path]) return;
-    self.switchingPlaylist = YES;
-    self.playlistIndex = next;
-    [self replaceVideoURL:url];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ self.switchingPlaylist = NO; });
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        if (self.switchingPlaylist || self.drawingMode || self.playlist.count < 2) return;
+        self.switchingPlaylist = YES;
+        self.activePlaylistPan = gesture;
+        UIView *snapshot = [self.view snapshotViewAfterScreenUpdates:NO];
+        UIView *overlay = [[UIView alloc] initWithFrame:self.view.bounds];
+        overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        overlay.backgroundColor = UIColor.blackColor;
+        overlay.clipsToBounds = YES;
+        overlay.userInteractionEnabled = NO;
+        self.playlistSwipeOverlay = overlay;
+        self.playlistSwipeGenerators = [NSMutableArray array];
+        self.playlistSwipePreviousView = [self playlistPreviewAtIndex:self.playlistIndex - 1 overlay:overlay];
+        self.playlistSwipeNextView = [self playlistPreviewAtIndex:self.playlistIndex + 1 overlay:overlay];
+        snapshot.frame = overlay.bounds;
+        [overlay addSubview:snapshot];
+        self.playlistSwipeCurrentView = snapshot;
+        [self.view addSubview:overlay];
+    }
+    if (self.activePlaylistPan != gesture || !self.playlistSwipeOverlay) return;
+    CGPoint translation = [gesture translationInView:self.view];
+    CGFloat width = MAX(self.playlistSwipeOverlay.bounds.size.width, 1);
+    CGFloat offset = translation.x;
+    NSInteger next = self.playlistIndex + (offset < 0 ? 1 : -1);
+    BOOL available = [self canSwipeToPlaylistIndex:next];
+    if (!available) offset *= 0.22;
+    offset = MAX(-width, MIN(width, offset));
+    [self positionPlaylistSwipe:offset];
+    if (gesture.state != UIGestureRecognizerStateEnded && gesture.state != UIGestureRecognizerStateCancelled && gesture.state != UIGestureRecognizerStateFailed) return;
+    CGPoint velocity = [gesture velocityInView:self.view];
+    BOOL commit = gesture.state == UIGestureRecognizerStateEnded && available &&
+        (fabs(translation.x) >= MAX(60, width * 0.22) || (fabs(translation.x) > 20 && fabs(velocity.x) > 650 && velocity.x * translation.x > 0));
+    CGFloat destination = commit ? (offset < 0 ? -width : width) : 0;
+    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        [self positionPlaylistSwipe:destination];
+    } completion:^(BOOL finished) {
+        if (!commit) { [self finishPlaylistSwipe]; return; }
+        self.playlistIndex = next;
+        [self replaceVideoURL:self.playlist[next]];
+        UIView *overlay = self.playlistSwipeOverlay;
+        // 動画置換のメインキュー処理の後で準備完了を待つ。
+        dispatch_async(dispatch_get_main_queue(), ^{ [self revealPlaylistAfterReplacement:0 overlay:overlay]; });
+    }];
 }
 
 - (void)resetAndPlay {
@@ -1586,6 +1734,13 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     }
 }
 
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if (gestureRecognizer == self.playlistPanGesture || gestureRecognizer == self.playlistOverlayPanGesture) {
+        CGPoint velocity = [(UIPanGestureRecognizer *)gestureRecognizer velocityInView:self.view];
+        return !self.drawingMode && !self.switchingPlaylist && self.playlist.count > 1 && fabs(velocity.x) > fabs(velocity.y) * 1.15;
+    }
+    return YES;
+}
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     for (UIView *view = touch.view; view && view != self.speedControlHost; view = view.superview) {
         if ([view isKindOfClass:UIControl.class] || view == self.speedControlContainer || view == self.featureControlContainer || view == self.drawingPalette || view == self.drawingCanvas) return NO;

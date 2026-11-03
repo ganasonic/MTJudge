@@ -24,6 +24,15 @@ willConnectToSession:(UISceneSession *)session
 
     UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"Main" bundle:nil];
     UITabBarController *tabBarController = (UITabBarController *)[storyboard instantiateInitialViewController];
+    NSDictionary<NSString *, NSString *> *menuSymbols = @{
+        @"DMViewController": @"person.2.fill",
+        @"SettingViewController": @"gearshape",
+        @"VideoRecordingViewController": @"camera"
+    };
+    for (UIViewController *controller in tabBarController.viewControllers) {
+        NSString *symbol = menuSymbols[NSStringFromClass(controller.class)];
+        if (symbol) controller.tabBarItem.image = [UIImage systemImageNamed:symbol];
+    }
 
     AppDelegate *appDelegate = (AppDelegate *)UIApplication.sharedApplication.delegate;
     if (![appDelegate isDeveloperModeEnabled]) {
