@@ -1,5 +1,6 @@
 #import "WaterJumpReceivedPlayerViewController.h"
 #import "WaterJumpComparisonViewController.h"
+#import "../Overlay/VideoOverlayViewController.h"
 #import "WaterJumpSettingsViewController.h"
 #import "MTJudge-Swift.h"
 #import <Vision/Vision.h>
@@ -824,6 +825,11 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
     self.strobeButton.tintColor = UIColor.systemOrangeColor;
     self.compareButton = [self featureButtonWithSymbol:@"plus.rectangle.on.rectangle" action:@selector(selectComparisonVideo:) label:@"比較する動画を選択"];
     self.compareButton.tintColor = UIColor.systemGreenColor;
+    UILongPressGestureRecognizer *overlayPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectOverlayVideo:)];
+    overlayPress.minimumPressDuration = 0.5;
+    overlayPress.cancelsTouchesInView = YES;
+    [self.compareButton addGestureRecognizer:overlayPress];
+    self.compareButton.accessibilityHint = @"タップで2画面比較、長押しでAI動画重ね合わせ比較";
     self.deleteButton = [self featureButtonWithSymbol:@"trash" action:@selector(deleteCurrentVideo:) label:@"再生中の動画を削除"];
     self.deleteButton.tintColor = UIColor.systemRedColor;
     self.deleteButton.hidden = YES;
@@ -1815,6 +1821,26 @@ static NSArray<NSURL *> *WJPlayerVideoAndRelatedJSONFiles(NSURL *videoURL) {
         if (!self) return;
         WaterJumpComparisonViewController *comparison = [[WaterJumpComparisonViewController alloc] initWithMainURL:mainURL subURL:url];
         [self presentViewController:comparison animated:YES completion:^{ [comparison startPlayback]; }];
+    }];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:library];
+    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+    [self presentViewController:navigation animated:YES completion:nil];
+}
+
+// A recognized long press cancels touchUpInside; a short tap retains the existing comparison.
+- (void)selectOverlayVideo:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan || self.presentedViewController) return;
+    AVAsset *asset = self.player.currentItem.asset;
+    NSURL *mainURL = [asset isKindOfClass:AVURLAsset.class] ? [(AVURLAsset *)asset URL] : nil;
+    if (!mainURL) return;
+    [self.player pause];
+    [self.playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+    __weak typeof(self) weakSelf = self;
+    UIViewController *library = [WaterJumpSettingsViewController videoLibraryViewControllerForComparisonWithMainURL:mainURL selection:^(NSURL *url) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+        VideoOverlayViewController *overlay = [[VideoOverlayViewController alloc] initWithMainURL:mainURL subURL:url];
+        [self presentViewController:overlay animated:YES completion:nil];
     }];
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:library];
     navigation.modalPresentationStyle = UIModalPresentationPageSheet;

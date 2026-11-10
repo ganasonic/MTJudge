@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0347B149E5FCCE324F89ECF8 /* MTJudge/Overlay/OverlaySessionStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 581AA40408FC8A58D2A2CB4A /* MTJudge/Overlay/OverlaySessionStore.m */; };
 		0E03748822A4C09500E4D686 /* MeasureViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 0E03748722A4C09500E4D686 /* MeasureViewController.m */; };
 		0E03748B22A4C3F200E4D686 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0E03748A22A4C3F200E4D686 /* CoreMotion.framework */; };
 		0E06012C22A749C7009AE206 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0E06012B22A749C7009AE206 /* CoreLocation.framework */; };
@@ -48,14 +49,25 @@
 		0EBEBA272265946C001C91BD /* turn1.png in Resources */ = {isa = PBXBuildFile; fileRef = 0EBEBA222265946C001C91BD /* turn1.png */; };
 		0EBEBA29226598D2001C91BD /* course.png in Resources */ = {isa = PBXBuildFile; fileRef = 0EBEBA28226598D2001C91BD /* course.png */; };
 		2017B1260BCC8792731689D0 /* MTJudgeTests/RecordingControllerRegression.m in Sources */ = {isa = PBXBuildFile; fileRef = 3AA1EF6B1915CA6E5933AE06 /* MTJudgeTests/RecordingControllerRegression.m */; };
+		282AE04F865E7DBD7F4684BF /* MTJudge/Overlay/OverlayAnalysis.m in Sources */ = {isa = PBXBuildFile; fileRef = B70C84C4B0267F262182DEE5 /* MTJudge/Overlay/OverlayAnalysis.m */; };
 		29DCE430167C01DF5B3CCEEA /* MTJudge/WaterJump/VideoReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BB23E521B4AFD02A7DAA962 /* MTJudge/WaterJump/VideoReceiver.swift */; };
 		42764D620D6CECE298CC315E /* MTJudge/WaterJump/ReceivedVideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C90D5632784C7447A594CA3 /* MTJudge/WaterJump/ReceivedVideoManager.swift */; };
+		4FBB4B63AD3BAFE52A9DF730 /* MTJudge/Overlay/VideoOverlayViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 731FD8E29A655DEF638C21BD /* MTJudge/Overlay/VideoOverlayViewController.m */; };
+		546FD7831D96DCCF503A3B9A /* System/Library/Frameworks/Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F61A39AAEC9BDDD44E74FAAE /* System/Library/Frameworks/Metal.framework */; };
 		5723C9EC9508B9E5F3094E4E /* MTJudge/WaterJump/WaterJumpSettingsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = EB588EE5FDB85BB65F0EBB3F /* MTJudge/WaterJump/WaterJumpSettingsViewController.m */; };
+		59EEE21AE0FD57D34FE424AE /* MTJudge/Overlay/OverlayAnnotationAdapter.m in Sources */ = {isa = PBXBuildFile; fileRef = 9A4CB870115345D7BDA4EED3 /* MTJudge/Overlay/OverlayAnnotationAdapter.m */; };
 		624D455F6183D1D2354BBA42 /* MTJudge/WaterJump/TransferChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7263AFC553342BD3E2F12ABF /* MTJudge/WaterJump/TransferChannel.swift */; };
+		659AE538B9065C13C2729DD6 /* MTJudge/Overlay/OverlayMetalView.m in Sources */ = {isa = PBXBuildFile; fileRef = E6F0AA9B3994C836DE21E33E /* MTJudge/Overlay/OverlayMetalView.m */; };
 		6DDC67FF2C83FD23DEF7311F /* MTJudgeWatch/MTJudgeWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 038F090FE639BE252399DB15 /* MTJudgeWatch/MTJudgeWatchApp.swift */; };
 		6DDC68002C83FD23DEF7311F /* MTJudgeWatch/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 038F0910E639BE252399DB15 /* MTJudgeWatch/Assets.xcassets */; };
+		84C14CA8A4ABB41BC606AB31 /* System/Library/Frameworks/CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B465012A14A2E22E9E1B3DC /* System/Library/Frameworks/CoreImage.framework */; };
 		87748C9C4BD85B9F777BADC7 /* MTJudge/WaterJump/VideoTransferManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */; };
 		91E3FA2906F83913E858C98F /* MTJudge/WaterJump/WaterJumpCoordinator.m in Sources */ = {isa = PBXBuildFile; fileRef = F5488A591BB841A18E19583F /* MTJudge/WaterJump/WaterJumpCoordinator.m */; };
+		A10F00000000000000000002 /* ThirdParty/OpenCV/OpenCV-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = A10F00000000000000000001 /* ThirdParty/OpenCV/OpenCV-LICENSE.txt */; };
+		A10F00000000000000000004 /* MTJudgeTests/OverlayGeometryRegression.m in Sources */ = {isa = PBXBuildFile; fileRef = A10F00000000000000000003 /* MTJudgeTests/OverlayGeometryRegression.m */; };
+		A10F00000000000000000006 /* MTJudgeTests/OverlayPlaybackRegression.m in Sources */ = {isa = PBXBuildFile; fileRef = A10F00000000000000000005 /* MTJudgeTests/OverlayPlaybackRegression.m */; };
+		A10F00000000000000000009 /* MTJudge/Overlay/OverlayTimelineMapper.m in Sources */ = {isa = PBXBuildFile; fileRef = A10F00000000000000000008 /* MTJudge/Overlay/OverlayTimelineMapper.m */; };
+		A10F0000000000000000000B /* MTJudgeTests/OverlayCourseSyncRegression.m in Sources */ = {isa = PBXBuildFile; fileRef = A10F0000000000000000000A /* MTJudgeTests/OverlayCourseSyncRegression.m */; };
 		A1B2C3D40000000000000001 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* SceneDelegate.m */; };
 		AB7010000000000000000002 /* MTJLocalization.m in Sources */ = {isa = PBXBuildFile; fileRef = AB7010000000000000000001 /* MTJLocalization.m */; };
 		AB7010000000000000000004 /* MTJLanguages.json in Resources */ = {isa = PBXBuildFile; fileRef = AB7010000000000000000003 /* MTJLanguages.json */; };
@@ -64,6 +76,7 @@
 		B1C2D3E40000000000000012 /* MTJudge/Analysis/VideoPoseAnalysisManager.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000014 /* MTJudge/Analysis/VideoPoseAnalysisManager.m */; };
 		B1C2D3E40000000000000017 /* MTJudge/Analysis/TakeoffAnalysisConfig.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000019 /* MTJudge/Analysis/TakeoffAnalysisConfig.m */; };
 		B1C2D3E40000000000000020 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E40000000000000022 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m */; };
+		C3BD19675782D3202C359B0F /* MTJudge/Overlay/OverlayRegistration.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9D262CCEA78FD537E2D7EB3D /* MTJudge/Overlay/OverlayRegistration.mm */; };
 		CA0A3CB32E5154300028E396 /* SettingViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CA0A3CB22E5154300028E396 /* SettingViewController.m */; };
 		CA537D662E6D273B0002A9DA /* VideoRecorder.m in Sources */ = {isa = PBXBuildFile; fileRef = CA537D652E6D273B0002A9DA /* VideoRecorder.m */; };
 		CA537D672E6D273B0002A9DA /* TagManager.m in Sources */ = {isa = PBXBuildFile; fileRef = CA537D632E6D273B0002A9DA /* TagManager.m */; };
@@ -85,8 +98,10 @@
 		D032C97F924E49AB90C52F02 /* MTJudge/WaterJump/CameraGroupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D032C97F924E49AB90C52F01 /* MTJudge/WaterJump/CameraGroupManager.swift */; };
 		D3E4F5A60000000000000001 /* StrobeFeature.m in Sources */ = {isa = PBXBuildFile; fileRef = D3E4F5A60000000000000003 /* StrobeFeature.m */; };
 		D7E05DFE6A6C28C4E399AF1D /* MTJudge/WaterJump/WatchRemoteController.m in Sources */ = {isa = PBXBuildFile; fileRef = 9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */; };
+		D9DD7FC32F96A9E250EA1A54 /* System/Library/Frameworks/Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 27E0BE26A55E1373D7EE6DB0 /* System/Library/Frameworks/Accelerate.framework */; };
 		D9EB0DE920F0B4E90433A993 /* MTJudge/WaterJump/RecordingController.m in Sources */ = {isa = PBXBuildFile; fileRef = 653467DD2BDB984EEE0DC45D /* MTJudge/WaterJump/RecordingController.m */; };
 		E1727CFF3F381B863DF9A165 /* MTJudge/WaterJump/PeerDiscoveryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB05D305E2AAB63DC4A20226 /* MTJudge/WaterJump/PeerDiscoveryManager.swift */; };
+		F0C89423C25804FC8FA90D75 /* System/Library/Frameworks/MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1313EB4898FAFA371984B94E /* System/Library/Frameworks/MetalKit.framework */; };
 		F203202F4A0AC5A679A87243 /* MTJudgeWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 27DDAA7C6240B9E2D7F7077D /* MTJudgeWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		F62ACA16BD10050D07A5CCC1 /* MTJudge/WaterJump/RemoteRecordingServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210420B65F272261DBF343AF /* MTJudge/WaterJump/RemoteRecordingServer.swift */; };
 /* End PBXBuildFile section */
@@ -191,19 +206,37 @@
 		0EBEBA212265946C001C91BD /* turn3.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = turn3.png; path = resource/turn3.png; sourceTree = SOURCE_ROOT; };
 		0EBEBA222265946C001C91BD /* turn1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = turn1.png; path = resource/turn1.png; sourceTree = SOURCE_ROOT; };
 		0EBEBA28226598D2001C91BD /* course.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = course.png; path = resource/course.png; sourceTree = SOURCE_ROOT; };
+		1313EB4898FAFA371984B94E /* System/Library/Frameworks/MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		210420B65F272261DBF343AF /* MTJudge/WaterJump/RemoteRecordingServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/RemoteRecordingServer.swift; sourceTree = SOURCE_ROOT; };
 		27DDAA7C6240B9E2D7F7077D /* MTJudgeWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = MTJudgeWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		27E0BE26A55E1373D7EE6DB0 /* System/Library/Frameworks/Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		2BB23E521B4AFD02A7DAA962 /* MTJudge/WaterJump/VideoReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/VideoReceiver.swift; sourceTree = SOURCE_ROOT; };
 		2C90D5632784C7447A594CA3 /* MTJudge/WaterJump/ReceivedVideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/ReceivedVideoManager.swift; sourceTree = SOURCE_ROOT; };
+		320F3CFE5F107ADD80056935 /* MTJudge/Overlay/OverlaySessionStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/OverlaySessionStore.h; sourceTree = SOURCE_ROOT; };
 		3AA1EF6B1915CA6E5933AE06 /* MTJudgeTests/RecordingControllerRegression.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudgeTests/RecordingControllerRegression.m; sourceTree = SOURCE_ROOT; };
+		4B465012A14A2E22E9E1B3DC /* System/Library/Frameworks/CoreImage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = System/Library/Frameworks/CoreImage.framework; sourceTree = SDKROOT; };
+		581AA40408FC8A58D2A2CB4A /* MTJudge/Overlay/OverlaySessionStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Overlay/OverlaySessionStore.m; sourceTree = SOURCE_ROOT; };
 		653467DD2BDB984EEE0DC45D /* MTJudge/WaterJump/RecordingController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/RecordingController.m; sourceTree = SOURCE_ROOT; };
 		67CE8EAEF1F8345CD57479E9 /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.h; sourceTree = SOURCE_ROOT; };
+		69FBFAC6EE9F7BACA76E4F33 /* MTJudge/Overlay/OverlayAnalysis.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/OverlayAnalysis.h; sourceTree = SOURCE_ROOT; };
 		7263AFC553342BD3E2F12ABF /* MTJudge/WaterJump/TransferChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/TransferChannel.swift; sourceTree = SOURCE_ROOT; };
+		731FD8E29A655DEF638C21BD /* MTJudge/Overlay/VideoOverlayViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Overlay/VideoOverlayViewController.m; sourceTree = SOURCE_ROOT; };
 		83E6CD37C95734B4B1587A9C /* MTJudge/WaterJump/VideoTransferManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/VideoTransferManager.swift; sourceTree = SOURCE_ROOT; };
+		9A4CB870115345D7BDA4EED3 /* MTJudge/Overlay/OverlayAnnotationAdapter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Overlay/OverlayAnnotationAdapter.m; sourceTree = SOURCE_ROOT; };
+		9A7E37AE41C86E6249B53C92 /* MTJudge/Overlay/OverlayAnnotationAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/OverlayAnnotationAdapter.h; sourceTree = SOURCE_ROOT; };
+		9D262CCEA78FD537E2D7EB3D /* MTJudge/Overlay/OverlayRegistration.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MTJudge/Overlay/OverlayRegistration.mm; sourceTree = SOURCE_ROOT; };
 		9F2108CE8D1F37D71672C68A /* MTJudge/WaterJump/WatchRemoteController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WatchRemoteController.m; sourceTree = SOURCE_ROOT; };
+		A10F00000000000000000001 /* ThirdParty/OpenCV/OpenCV-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ThirdParty/OpenCV/OpenCV-LICENSE.txt"; sourceTree = SOURCE_ROOT; };
+		A10F00000000000000000003 /* MTJudgeTests/OverlayGeometryRegression.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudgeTests/OverlayGeometryRegression.m; sourceTree = SOURCE_ROOT; };
+		A10F00000000000000000005 /* MTJudgeTests/OverlayPlaybackRegression.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudgeTests/OverlayPlaybackRegression.m; sourceTree = SOURCE_ROOT; };
+		A10F00000000000000000007 /* MTJudge/Overlay/OverlayTimelineMapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/OverlayTimelineMapper.h; sourceTree = SOURCE_ROOT; };
+		A10F00000000000000000008 /* MTJudge/Overlay/OverlayTimelineMapper.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Overlay/OverlayTimelineMapper.m; sourceTree = SOURCE_ROOT; };
+		A10F0000000000000000000A /* MTJudgeTests/OverlayCourseSyncRegression.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudgeTests/OverlayCourseSyncRegression.m; sourceTree = SOURCE_ROOT; };
+		A19BDCB96C06C0999460721C /* ThirdParty/OpenCV/opencv2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = ThirdParty/OpenCV/opencv2.framework; sourceTree = SOURCE_ROOT; };
 		A1B2C3D40000000000000002 /* SceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; };
 		A1B2C3D40000000000000003 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
 		A52C62819DACD06DA9A2B113 /* MTJudge/WaterJump/WaterJumpSettingsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/WaterJumpSettingsViewController.h; sourceTree = SOURCE_ROOT; };
+		A72C9DD03F8B66715B76B5CD /* MTJudge/Overlay/OverlayRegistration.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/OverlayRegistration.h; sourceTree = SOURCE_ROOT; };
 		AB7010000000000000000001 /* MTJLocalization.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJLocalization.m; sourceTree = "<group>"; };
 		AB7010000000000000000003 /* MTJLanguages.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MTJLanguages.json; sourceTree = "<group>"; };
 		AB7010000000000000000005 /* MTJLocalization.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJLocalization.h; sourceTree = "<group>"; };
@@ -217,6 +250,7 @@
 		B1C2D3E40000000000000019 /* MTJudge/Analysis/TakeoffAnalysisConfig.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/TakeoffAnalysisConfig.m; sourceTree = SOURCE_ROOT; };
 		B1C2D3E40000000000000021 /* MTJudge/Analysis/TakeoffAngleAnalyzer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Analysis/TakeoffAngleAnalyzer.h; sourceTree = SOURCE_ROOT; };
 		B1C2D3E40000000000000022 /* MTJudge/Analysis/TakeoffAngleAnalyzer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Analysis/TakeoffAngleAnalyzer.m; sourceTree = SOURCE_ROOT; };
+		B70C84C4B0267F262182DEE5 /* MTJudge/Overlay/OverlayAnalysis.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Overlay/OverlayAnalysis.m; sourceTree = SOURCE_ROOT; };
 		CA0A3CB22E5154300028E396 /* SettingViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SettingViewController.m; sourceTree = "<group>"; };
 		CA0A3CB42E5154800028E396 /* SettingViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SettingViewController.h; sourceTree = "<group>"; };
 		CA537D5E2E6D273B0002A9DA /* Tag.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Tag.h; sourceTree = "<group>"; };
@@ -249,9 +283,13 @@
 		D032C97F924E49AB90C52F01 /* MTJudge/WaterJump/CameraGroupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/CameraGroupManager.swift; sourceTree = SOURCE_ROOT; };
 		D3E4F5A60000000000000002 /* StrobeFeature.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StrobeFeature.h; sourceTree = "<group>"; };
 		D3E4F5A60000000000000003 /* StrobeFeature.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = StrobeFeature.m; sourceTree = "<group>"; };
+		E3F22D50D20FD992EA40E109 /* MTJudge/Overlay/VideoOverlayViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/VideoOverlayViewController.h; sourceTree = SOURCE_ROOT; };
+		E6F0AA9B3994C836DE21E33E /* MTJudge/Overlay/OverlayMetalView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/Overlay/OverlayMetalView.m; sourceTree = SOURCE_ROOT; };
 		EB588EE5FDB85BB65F0EBB3F /* MTJudge/WaterJump/WaterJumpSettingsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpSettingsViewController.m; sourceTree = SOURCE_ROOT; };
+		ECFDCFD6B95794DE11CE5108 /* MTJudge/Overlay/OverlayMetalView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/Overlay/OverlayMetalView.h; sourceTree = SOURCE_ROOT; };
 		F37A25F8A060C8CA03451779 /* MTJudge/WaterJump/RecordingController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTJudge/WaterJump/RecordingController.h; sourceTree = SOURCE_ROOT; };
 		F5488A591BB841A18E19583F /* MTJudge/WaterJump/WaterJumpCoordinator.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpCoordinator.m; sourceTree = SOURCE_ROOT; };
+		F61A39AAEC9BDDD44E74FAAE /* System/Library/Frameworks/Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		FB05D305E2AAB63DC4A20226 /* MTJudge/WaterJump/PeerDiscoveryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTJudge/WaterJump/PeerDiscoveryManager.swift; sourceTree = SOURCE_ROOT; };
 		FF91EA9C2F93729761AA04FF /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -261,6 +299,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				546FD7831D96DCCF503A3B9A /* System/Library/Frameworks/Metal.framework in Frameworks */,
+				F0C89423C25804FC8FA90D75 /* System/Library/Frameworks/MetalKit.framework in Frameworks */,
+				D9DD7FC32F96A9E250EA1A54 /* System/Library/Frameworks/Accelerate.framework in Frameworks */,
+				84C14CA8A4ABB41BC606AB31 /* System/Library/Frameworks/CoreImage.framework in Frameworks */,
 				CA6B36AD2E74EE1C00A5E218 /* QuartzCore.framework in Frameworks */,
 				CA6B36AB2E74EE1100A5E218 /* Vision.framework in Frameworks */,
 				CA6B36AF2E74EE2B00A5E218 /* AVFoundation.framework in Frameworks */,
@@ -313,6 +355,29 @@
 		0E359825226550C80093671C = {
 			isa = PBXGroup;
 			children = (
+				A10F00000000000000000007 /* MTJudge/Overlay/OverlayTimelineMapper.h */,
+				A10F00000000000000000008 /* MTJudge/Overlay/OverlayTimelineMapper.m */,
+				A10F00000000000000000001 /* ThirdParty/OpenCV/OpenCV-LICENSE.txt */,
+				A10F00000000000000000003 /* MTJudgeTests/OverlayGeometryRegression.m */,
+				A10F00000000000000000005 /* MTJudgeTests/OverlayPlaybackRegression.m */,
+				A10F0000000000000000000A /* MTJudgeTests/OverlayCourseSyncRegression.m */,
+				A72C9DD03F8B66715B76B5CD /* MTJudge/Overlay/OverlayRegistration.h */,
+				9D262CCEA78FD537E2D7EB3D /* MTJudge/Overlay/OverlayRegistration.mm */,
+				320F3CFE5F107ADD80056935 /* MTJudge/Overlay/OverlaySessionStore.h */,
+				581AA40408FC8A58D2A2CB4A /* MTJudge/Overlay/OverlaySessionStore.m */,
+				69FBFAC6EE9F7BACA76E4F33 /* MTJudge/Overlay/OverlayAnalysis.h */,
+				B70C84C4B0267F262182DEE5 /* MTJudge/Overlay/OverlayAnalysis.m */,
+				9A7E37AE41C86E6249B53C92 /* MTJudge/Overlay/OverlayAnnotationAdapter.h */,
+				9A4CB870115345D7BDA4EED3 /* MTJudge/Overlay/OverlayAnnotationAdapter.m */,
+				ECFDCFD6B95794DE11CE5108 /* MTJudge/Overlay/OverlayMetalView.h */,
+				E6F0AA9B3994C836DE21E33E /* MTJudge/Overlay/OverlayMetalView.m */,
+				E3F22D50D20FD992EA40E109 /* MTJudge/Overlay/VideoOverlayViewController.h */,
+				731FD8E29A655DEF638C21BD /* MTJudge/Overlay/VideoOverlayViewController.m */,
+				A19BDCB96C06C0999460721C /* ThirdParty/OpenCV/opencv2.framework */,
+				F61A39AAEC9BDDD44E74FAAE /* System/Library/Frameworks/Metal.framework */,
+				1313EB4898FAFA371984B94E /* System/Library/Frameworks/MetalKit.framework */,
+				27E0BE26A55E1373D7EE6DB0 /* System/Library/Frameworks/Accelerate.framework */,
+				4B465012A14A2E22E9E1B3DC /* System/Library/Frameworks/CoreImage.framework */,
 				FF91EA9C2F93729761AA04FF /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.m */,
 				67CE8EAEF1F8345CD57479E9 /* MTJudge/WaterJump/WaterJumpReceivedPlayerViewController.h */,
 				EB588EE5FDB85BB65F0EBB3F /* MTJudge/WaterJump/WaterJumpSettingsViewController.m */,
@@ -630,6 +695,7 @@
 				0EA5619C2266CC15005123C1 /* moon_32.png in Resources */,
 				0EBEBA29226598D2001C91BD /* course.png in Resources */,
 				0E35983C226550C80093671C /* Main.storyboard in Resources */,
+				A10F00000000000000000002 /* ThirdParty/OpenCV/OpenCV-LICENSE.txt in Resources */,
 				0EBEBA272265946C001C91BD /* turn1.png in Resources */,
 				0EBEBA252265946C001C91BD /* turn2.png in Resources */,
 			);
@@ -702,7 +768,14 @@
 				0E35987322655BF00093671C /* AirViewController.m in Sources */,
 				0E359844226550C90093671C /* main.m in Sources */,
 				0E35987422655BF00093671C /* DrawingView.m in Sources */,
+				C3BD19675782D3202C359B0F /* MTJudge/Overlay/OverlayRegistration.mm in Sources */,
+				0347B149E5FCCE324F89ECF8 /* MTJudge/Overlay/OverlaySessionStore.m in Sources */,
+				282AE04F865E7DBD7F4684BF /* MTJudge/Overlay/OverlayAnalysis.m in Sources */,
+				59EEE21AE0FD57D34FE424AE /* MTJudge/Overlay/OverlayAnnotationAdapter.m in Sources */,
+				659AE538B9065C13C2729DD6 /* MTJudge/Overlay/OverlayMetalView.m in Sources */,
+				4FBB4B63AD3BAFE52A9DF730 /* MTJudge/Overlay/VideoOverlayViewController.m in Sources */,
 				D3E4F5A60000000000000001 /* StrobeFeature.m in Sources */,
+				A10F00000000000000000009 /* MTJudge/Overlay/OverlayTimelineMapper.m in Sources */,
 				CA537D792E6D2FFE0002A9DA /* VideoRecordingViewController.m in Sources */,
 				0E35987522655BF00093671C /* JudgeViewController.m in Sources */,
 				0E35987822655BF00093671C /* TouchDrawingView.m in Sources */,
@@ -716,6 +789,9 @@
 			files = (
 				2017B1260BCC8792731689D0 /* MTJudgeTests/RecordingControllerRegression.m in Sources */,
 				0E35984E226550C90093671C /* MTJudgeTests.m in Sources */,
+				A10F00000000000000000004 /* MTJudgeTests/OverlayGeometryRegression.m in Sources */,
+				A10F00000000000000000006 /* MTJudgeTests/OverlayPlaybackRegression.m in Sources */,
+				A10F0000000000000000000B /* MTJudgeTests/OverlayCourseSyncRegression.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -903,7 +979,11 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25.9;
+				CURRENT_PROJECT_VERSION = 26.0;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/ThirdParty/OpenCV",
+				);
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = (
 					PICKER_AIR_DATA_FROM_JSON,
 					"$(inherited)",
@@ -917,7 +997,19 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 5.9;
+				MARKETING_VERSION = 6.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+					"-lz",
+				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-lc++",
+					"-lz",
+					"-framework",
+					opencv2,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -934,8 +1026,12 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25.9;
+				CURRENT_PROJECT_VERSION = 26.0;
 				DEVELOPMENT_TEAM = UM9N74S758;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/ThirdParty/OpenCV",
+				);
 				"GCC_PREPROCESSOR_DEFINITIONS[arch=*]" = PICKER_AIR_DATA_FROM_JSON;
 				INFOPLIST_FILE = MTJudge/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MTJudge;
@@ -946,7 +1042,19 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 5.9;
+				MARKETING_VERSION = 6.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+					"-lz",
+				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-lc++",
+					"-lz",
+					"-framework",
+					opencv2,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1036,9 +1144,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26.0;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MTJudgeWatch/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
+				MARKETING_VERSION = 6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -1057,9 +1167,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26.0;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MTJudgeWatch/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
+				MARKETING_VERSION = 6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ganasonic.tool.app.MTJudge.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;

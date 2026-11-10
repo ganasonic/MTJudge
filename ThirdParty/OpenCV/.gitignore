@@ -1,0 +1,2 @@
+# Official 582 MB binary is restored with setup.sh; never commit generated framework binaries.
+opencv2.framework/
