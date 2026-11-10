@@ -36,6 +36,11 @@
 @property (nonatomic, readonly) NSArray<NSNumber *> *zoomPresets;
 - (void)setZoomFactor:(CGFloat)factor completion:(void (^)(CGFloat actualFactor, NSError *error))completion;
 
+// 0は自動露出。手動値は現在の形式・フレーム間隔で利用できる秒数のみ許可する。
+@property (nonatomic, readonly) NSArray<NSNumber *> *shutterSpeedOptions;
+@property (nonatomic, readonly) NSTimeInterval manualShutterDuration;
+- (void)setShutterDuration:(NSTimeInterval)seconds completion:(void (^)(NSError *error))completion;
+
 // 撮影を開始するメソッド
 @property (nonatomic, readonly) BOOL readyForRecording;
 - (void)startRecording;

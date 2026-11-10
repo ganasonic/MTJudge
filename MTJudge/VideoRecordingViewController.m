@@ -63,6 +63,8 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
 
 @interface VideoRecordingViewController () <UIDocumentPickerDelegate, UIGestureRecognizerDelegate>
 @property(nonatomic, strong) NSTimer *unattendedTimer;
+@property(nonatomic, strong) UIButton *shutterSpeedButton;
+@property(nonatomic) BOOL updatingShutterSpeed;
 @property(nonatomic, strong) UIControl *unattendedShield;
 @property(nonatomic, strong) UITapGestureRecognizer *cameraActivityMonitor;
 @property(nonatomic, strong) UIScreen *dimmedScreen;
@@ -943,6 +945,23 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
         [self.recordButton.widthAnchor constraintEqualToConstant:56],
         [self.recordButton.heightAnchor constraintEqualToConstant:56]
     ]];
+    self.shutterSpeedButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.shutterSpeedButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.shutterSpeedButton.titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
+    self.shutterSpeedButton.titleLabel.numberOfLines = 2;
+    self.shutterSpeedButton.titleLabel.textAlignment = NSTextAlignmentCenter;
+    self.shutterSpeedButton.tintColor = UIColor.whiteColor;
+    self.shutterSpeedButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
+    self.shutterSpeedButton.layer.cornerRadius = 10;
+    self.shutterSpeedButton.accessibilityLabel = @"シャッター速度を変更";
+    [self.shutterSpeedButton addTarget:self action:@selector(showShutterSpeeds:) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.shutterSpeedButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.shutterSpeedButton.topAnchor constraintEqualToAnchor:self.recordButton.bottomAnchor constant:8],
+        [self.shutterSpeedButton.centerXAnchor constraintEqualToAnchor:self.recordButton.centerXAnchor],
+        [self.shutterSpeedButton.widthAnchor constraintEqualToConstant:76],
+        [self.shutterSpeedButton.heightAnchor constraintEqualToConstant:44]
+    ]];
     self.transferRetryButton = [self cameraButtonWithAction:@selector(retryFailedTransfer)];
     [self styleButton:self.transferRetryButton title:MTJText(@"転送を再送") symbol:@"arrow.clockwise.icloud" color:UIColor.systemOrangeColor];
     self.transferRetryButton.hidden = ![WaterJumpCoordinator shared].transferNeedsRetry;
@@ -966,9 +985,43 @@ static NSArray<NSURL *> *WJCameraVideoAndRelatedJSONFiles(NSURL *videoURL) {
     [self updateCameraControls];
 }
 
+- (void)showShutterSpeeds:(UIButton *)sender {
+    if (self.presentedViewController || self.updatingShutterSpeed) return;
+    NSArray<NSNumber *> *options = self.videoRecorder.shutterSpeedOptions;
+    UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"シャッター速度" message:options.count ? @"手動設定中はISOも現在の値で固定されます。暗い場合は自動へ戻してください。" : @"現在のカメラはシャッター速度の手動設定に対応していません。" preferredStyle:UIAlertControllerStyleActionSheet];
+    NSMutableArray *values = [NSMutableArray arrayWithObject:@0];
+    [values addObjectsFromArray:options];
+    for (NSNumber *value in values) {
+        NSString *title = value.doubleValue == 0 ? @"自動" : [NSString stringWithFormat:@"1/%.0f秒", 1.0 / value.doubleValue];
+        [menu addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            self.updatingShutterSpeed = YES;
+            [self updateCameraControls];
+            [self.videoRecorder setShutterDuration:value.doubleValue completion:^(NSError *error) {
+                self.updatingShutterSpeed = NO;
+                [self updateCameraControls];
+                if (error) {
+                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"シャッター速度" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                    [self presentViewController:alert animated:YES completion:nil];
+                }
+            }];
+        }]];
+    }
+    [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    menu.popoverPresentationController.sourceView = sender;
+    menu.popoverPresentationController.sourceRect = sender.bounds;
+    [self presentViewController:menu animated:YES completion:nil];
+}
+
 - (void)updateCameraControls {
     BOOL recording = self.videoRecorder.isRecording;
     BOOL playing = self.player != nil;
+    self.shutterSpeedButton.hidden = playing;
+    self.shutterSpeedButton.enabled = self.videoRecorder.readyForRecording && !self.updatingShutterSpeed && !self.finishingRecording;
+    double shutter = self.videoRecorder.manualShutterDuration;
+    NSString *shutterTitle = shutter > 0 ? [NSString stringWithFormat:@"1/%.0f", 1.0 / shutter] : @"自動";
+    [self.shutterSpeedButton setTitle:[NSString stringWithFormat:@"シャッター\n%@", shutterTitle] forState:UIControlStateNormal];
+    self.shutterSpeedButton.accessibilityValue = shutterTitle;
     UIColor *neutral = [UIColor colorWithWhite:0.22 alpha:0.95];
     self.playbackControls.hidden = !playing;
     [self updateZoomControls];

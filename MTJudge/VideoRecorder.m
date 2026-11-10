@@ -273,6 +273,51 @@
     });
 }
 
+- (NSArray<NSNumber *> *)shutterSpeedOptions {
+    AVCaptureDevice *device = self.cameraDevice;
+    if (!device || ![device isExposureModeSupported:AVCaptureExposureModeCustom]) return @[];
+    double minimum = CMTimeGetSeconds(device.activeFormat.minExposureDuration);
+    double maximum = CMTimeGetSeconds(device.activeFormat.maxExposureDuration);
+    double frame = CMTimeGetSeconds(device.activeVideoMinFrameDuration);
+    if (isfinite(frame) && frame > 0) maximum = MIN(maximum, frame);
+    NSMutableArray *options = [NSMutableArray array];
+    for (NSNumber *denominator in @[@30, @50, @60, @100, @120, @125, @250, @500, @1000, @2000, @4000, @8000]) {
+        double duration = 1.0 / denominator.doubleValue;
+        if (duration >= minimum && duration <= maximum) [options addObject:@(duration)];
+    }
+    return options;
+}
+- (NSTimeInterval)manualShutterDuration {
+    return self.cameraDevice.exposureMode == AVCaptureExposureModeCustom ? CMTimeGetSeconds(self.cameraDevice.exposureDuration) : 0;
+}
+- (void)setShutterDuration:(NSTimeInterval)seconds completion:(void (^)(NSError *))completion {
+    dispatch_async(self.zoomQueue, ^{
+        AVCaptureDevice *device = self.cameraDevice;
+        NSError *error = nil;
+        BOOL automatic = seconds == 0;
+        BOOL supported = device && (automatic ? [device isExposureModeSupported:AVCaptureExposureModeContinuousAutoExposure] : [device isExposureModeSupported:AVCaptureExposureModeCustom]);
+        double minimum = device ? CMTimeGetSeconds(device.activeFormat.minExposureDuration) : 0;
+        double maximum = device ? CMTimeGetSeconds(device.activeFormat.maxExposureDuration) : 0;
+        double frame = device ? CMTimeGetSeconds(device.activeVideoMinFrameDuration) : 0;
+        if (isfinite(frame) && frame > 0) maximum = MIN(maximum, frame);
+        if (!supported || !isfinite(seconds) || (!automatic && (seconds < minimum || seconds > maximum))) {
+            error = [NSError errorWithDomain:@"MTJudge.Camera" code:1 userInfo:@{NSLocalizedDescriptionKey:@"現在のカメラではこのシャッター速度を設定できません。"}];
+        } else if ([device lockForConfiguration:&error]) {
+            if (automatic) device.exposureMode = AVCaptureExposureModeContinuousAutoExposure;
+            else {
+                float iso = MAX(device.activeFormat.minISO, MIN(device.activeFormat.maxISO, device.ISO));
+                [device setExposureModeCustomWithDuration:CMTimeMakeWithSeconds(seconds, 1000000000) ISO:iso completionHandler:^(CMTime syncTime) {
+                    dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(nil); });
+                }];
+                [device unlockForConfiguration];
+                return;
+            }
+            [device unlockForConfiguration];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(error); });
+    });
+}
+
 #pragma mark - Recording Control
 
 // 録画の開始
